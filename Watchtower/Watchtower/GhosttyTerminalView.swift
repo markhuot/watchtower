@@ -674,7 +674,6 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         window?.makeFirstResponder(self)
 
         guard let surface = surface else { return }
-        let loc = self.convert(event.locationInWindow, from: nil)
         let mods = ghosttyMods(event.modifierFlags)
 
         ghostty_surface_mouse_button(
@@ -683,10 +682,6 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
             GHOSTTY_MOUSE_LEFT,
             mods
         )
-
-        // Send position
-        let scaledLoc = convertToBacking(loc)
-        ghostty_surface_mouse_pos(surface, scaledLoc.x, scaledLoc.y, mods)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -702,19 +697,35 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let surface = surface else { return }
-        let loc = self.convert(event.locationInWindow, from: nil)
-        let scaledLoc = convertToBacking(loc)
-        let mods = ghosttyMods(event.modifierFlags)
-        ghostty_surface_mouse_pos(surface, scaledLoc.x, scaledLoc.y, mods)
+        // Delegate to mouseMoved (matches reference implementation)
+        self.mouseMoved(with: event)
     }
 
     override func mouseMoved(with event: NSEvent) {
         guard let surface = surface else { return }
+        // Convert to view-local coordinates (bottom-left origin)
         let loc = self.convert(event.locationInWindow, from: nil)
-        let scaledLoc = convertToBacking(loc)
         let mods = ghosttyMods(event.modifierFlags)
-        ghostty_surface_mouse_pos(surface, scaledLoc.x, scaledLoc.y, mods)
+        // Ghostty expects unscaled, top-left origin coordinates.
+        // The embedded runtime scales by content scale factor internally.
+        ghostty_surface_mouse_pos(surface, loc.x, frame.height - loc.y, mods)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        guard let surface = surface else { return }
+        let loc = self.convert(event.locationInWindow, from: nil)
+        let mods = ghosttyMods(event.modifierFlags)
+        ghostty_surface_mouse_pos(surface, loc.x, frame.height - loc.y, mods)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard let surface = surface else { return }
+        // Skip exit if mouse is pressed (dragging across view boundary)
+        if NSEvent.pressedMouseButtons != 0 { return }
+        let mods = ghosttyMods(event.modifierFlags)
+        // Sentinel (-1, -1) tells ghostty the cursor has left the viewport
+        ghostty_surface_mouse_pos(surface, -1, -1, mods)
     }
 
     override func rightMouseDown(with event: NSEvent) {
