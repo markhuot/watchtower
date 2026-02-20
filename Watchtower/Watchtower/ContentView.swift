@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var viewModel = TerminalContainerViewModel()
@@ -11,7 +12,8 @@ struct ContentView: View {
                     ForEach(viewModel.terminals) { terminal in
                         TerminalPaneWithHandle(
                             terminal: terminal,
-                            allTerminals: viewModel.terminals
+                            allTerminals: viewModel.terminals,
+                            viewModel: viewModel
                         )
                     }
                 }
@@ -44,10 +46,12 @@ struct ContentView: View {
     }
 }
 
-/// A terminal pane with a draggable resize handle on its right edge.
+/// A terminal pane with a draggable resize handle on its right edge,
+/// and drop-target indicators on both edges for reordering.
 struct TerminalPaneWithHandle: View {
     @ObservedObject var terminal: TerminalModel
     let allTerminals: [TerminalModel]
+    @ObservedObject var viewModel: TerminalContainerViewModel
 
     /// Width at the moment the drag started.
     @State private var dragStartWidth: CGFloat? = nil
@@ -65,16 +69,65 @@ struct TerminalPaneWithHandle: View {
         return cols * estimatedCellWidth + padding
     }
 
+    /// The current index of this terminal in the array.
+    private var index: Int {
+        allTerminals.firstIndex(where: { $0.id == terminal.id }) ?? 0
+    }
+
+    /// Whether the left-edge drop indicator should be shown for this pane.
+    private var showLeftIndicator: Bool {
+        guard let dropSlot = viewModel.dropTargetIndex,
+              let dragId = viewModel.draggedTerminalId,
+              let dragIndex = allTerminals.firstIndex(where: { $0.id == dragId }) else {
+            return false
+        }
+        // Show left indicator on the first pane only when the drop slot is 0
+        // and it's not a no-op (dragged pane is already at index 0 or 1)
+        return index == 0 && dropSlot == 0 && dragIndex != 0
+    }
+
+    /// Whether the right-edge drop indicator should be shown for this pane.
+    private var showRightIndicator: Bool {
+        guard let dropSlot = viewModel.dropTargetIndex,
+              let dragId = viewModel.draggedTerminalId,
+              let dragIndex = allTerminals.firstIndex(where: { $0.id == dragId }) else {
+            return false
+        }
+        // Don't show if dropping here would be a no-op
+        // (the slot is immediately before or after the dragged pane's current position)
+        let isNoOp = (dropSlot == dragIndex || dropSlot == dragIndex + 1)
+        return dropSlot == index + 1 && !isNoOp
+    }
+
     var body: some View {
         HStack(spacing: 0) {
-            TerminalPaneView(terminal: terminal)
+            // Left drop indicator (only for the first pane)
+            if index == 0 {
+                DropIndicatorView(isActive: showLeftIndicator, targetSlot: 0, viewModel: viewModel)
+            }
+
+            TerminalPaneView(terminal: terminal, onDragStarted: {
+                    viewModel.dragStarted(terminalId: terminal.id)
+                }, onHeaderTapped: {
+                    viewModel.focusTerminal(id: terminal.id)
+                })
                 .frame(width: terminal.paneWidth)
                 .animation(nil, value: terminal.paneWidth)
+                .onDrop(of: [.text], delegate: PaneSplitDropDelegate(
+                    paneIndex: index,
+                    paneWidth: terminal.paneWidth,
+                    viewModel: viewModel
+                ))
 
-            // Resize handle: a thin draggable strip on the right edge
+            // Right drop indicator
+            DropIndicatorView(isActive: showRightIndicator, targetSlot: index + 1, viewModel: viewModel)
+
+            // Resize handle: a thin draggable strip on the right edge.
+            // The visual element is narrow but the hit area is wide for easier grabbing.
             Rectangle()
                 .fill(Color.clear)
                 .frame(width: 6)
+                .padding(.horizontal, 8)
                 .contentShape(Rectangle())
                 .onHover { hovering in
                     if hovering {
@@ -119,12 +172,181 @@ struct TerminalPaneWithHandle: View {
     }
 }
 
+// MARK: - Drop Delegate
+
+/// Handles drag-and-drop for reordering panes.
+/// Each drop zone (left/right half of a pane) creates one of these with its target slot index.
+struct PaneDropDelegate: DropDelegate {
+    let targetSlot: Int
+    let viewModel: TerminalContainerViewModel
+
+    func dropEntered(info: DropInfo) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            viewModel.dropTargetIndex = targetSlot
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        viewModel.dropTargetIndex = targetSlot
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        // Only clear if we're still pointing at this slot
+        if viewModel.dropTargetIndex == targetSlot {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                viewModel.dropTargetIndex = nil
+            }
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let draggedId = viewModel.draggedTerminalId else { return false }
+
+        viewModel.moveTerminal(id: draggedId, toSlot: targetSlot)
+        viewModel.cleanupDragState()
+
+        return true
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        return viewModel.draggedTerminalId != nil
+    }
+}
+
+/// Drop delegate placed on the full pane area.
+/// Determines which half the cursor is in and routes to the correct slot.
+struct PaneSplitDropDelegate: DropDelegate {
+    let paneIndex: Int
+    let paneWidth: CGFloat
+    let viewModel: TerminalContainerViewModel
+
+    private func slotForLocation(_ info: DropInfo) -> Int {
+        // info.location is in the coordinate space of the view the delegate is on.
+        // Left half → slot before this pane, right half → slot after.
+        if info.location.x < paneWidth / 2 {
+            return paneIndex
+        } else {
+            return paneIndex + 1
+        }
+    }
+
+    func dropEntered(info: DropInfo) {
+        let slot = slotForLocation(info)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            viewModel.dropTargetIndex = slot
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let slot = slotForLocation(info)
+        if viewModel.dropTargetIndex != slot {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                viewModel.dropTargetIndex = slot
+            }
+        }
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            viewModel.dropTargetIndex = nil
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let slot = slotForLocation(info)
+        guard let draggedId = viewModel.draggedTerminalId else { return false }
+
+        viewModel.moveTerminal(id: draggedId, toSlot: slot)
+        viewModel.cleanupDragState()
+
+        return true
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        return viewModel.draggedTerminalId != nil
+    }
+}
+
+// MARK: - Drop Indicator
+
+/// A vertical indicator between panes that doubles as a drop target.
+/// Always occupies the same space to prevent layout shift when dragging starts.
+struct DropIndicatorView: View {
+    let isActive: Bool
+    let targetSlot: Int
+    @ObservedObject var viewModel: TerminalContainerViewModel
+
+    @ObservedObject private var appManager = GhosttyAppManager.shared
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 1.5)
+            .fill(isActive ? appManager.highlightColor : Color.clear)
+            .frame(width: 3)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .onDrop(of: [.text], delegate: PaneDropDelegate(
+                targetSlot: targetSlot,
+                viewModel: viewModel
+            ))
+            .animation(.easeInOut(duration: 0.15), value: isActive)
+    }
+}
+
 class TerminalContainerViewModel: ObservableObject {
     @Published var terminals: [TerminalModel] = []
+
+    /// The index of the slot where a dragged pane would be inserted.
+    /// `nil` when no drag is active. 0 = before first pane, 1 = between first and second, etc.
+    @Published var dropTargetIndex: Int? = nil
+
+    /// The ID of the terminal currently being dragged.
+    @Published var draggedTerminalId: UUID? = nil
+
+    /// Event monitor for detecting when a drag session ends (mouse up).
+    private var dragEndMonitor: Any? = nil
 
     init() {
         // Start with one terminal
         addTerminal()
+    }
+
+    deinit {
+        if let monitor = dragEndMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    /// Call when a drag session begins to install cleanup monitoring.
+    func dragStarted(terminalId: UUID) {
+        draggedTerminalId = terminalId
+
+        // Install a one-shot local event monitor that cleans up drag state
+        // when the mouse button is released (drag session ends).
+        if dragEndMonitor == nil {
+            dragEndMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+                // Delay cleanup slightly so performDrop can fire first
+                DispatchQueue.main.async {
+                    self?.cleanupDragState()
+                }
+                return event
+            }
+        }
+    }
+
+    /// Reset all drag-related state.
+    func cleanupDragState() {
+        dropTargetIndex = nil
+        draggedTerminalId = nil
+        for terminal in terminals {
+            terminal.isDragging = false
+        }
+        if let monitor = dragEndMonitor {
+            NSEvent.removeMonitor(monitor)
+            dragEndMonitor = nil
+        }
     }
 
     func addTerminal() {
@@ -135,10 +357,37 @@ class TerminalContainerViewModel: ObservableObject {
             directory: NSHomeDirectory()
         )
         terminals.append(terminal)
+
+        // Focus the new terminal after SwiftUI has time to create the view
+        let newId = terminal.id
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let idx = self.terminals.firstIndex(where: { $0.id == newId }) else { return }
+            self.makeFocused(index: idx)
+        }
     }
 
     func removeTerminal(_ terminal: TerminalModel) {
         removeTerminal(byId: terminal.id)
+    }
+
+    /// Move a terminal from its current position to a new slot index.
+    /// `toSlot` is in pre-removal coordinates (0 = before first, count = after last).
+    func moveTerminal(id: UUID, toSlot slot: Int) {
+        guard let fromIndex = terminals.firstIndex(where: { $0.id == id }) else { return }
+
+        // Determine the actual destination index after removal
+        var destIndex = slot
+        if slot > fromIndex {
+            // Account for the item being removed before insertion
+            destIndex -= 1
+        }
+        destIndex = max(0, min(destIndex, terminals.count - 1))
+
+        guard destIndex != fromIndex else { return }
+
+        let terminal = terminals.remove(at: fromIndex)
+        terminals.insert(terminal, at: destIndex)
     }
 
     func removeTerminal(byId id: UUID) {
@@ -191,6 +440,12 @@ class TerminalContainerViewModel: ObservableObject {
         let currentIndex = terminals.firstIndex(where: { $0.isFocused }) ?? 0
         let newIndex = (currentIndex + 1) % terminals.count
         makeFocused(index: newIndex)
+    }
+
+    /// Focus a terminal by its ID (e.g. when the header is clicked).
+    func focusTerminal(id: UUID) {
+        guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
+        makeFocused(index: index)
     }
 
     private func makeFocused(index: Int) {

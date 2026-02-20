@@ -6,6 +6,7 @@ class TerminalModel: Identifiable, ObservableObject {
     @Published var status: TerminalStatus
     @Published var paneWidth: CGFloat
     @Published var isFocused: Bool = false
+    @Published var isDragging: Bool = false
     var directory: String
 
     /// Default pane width: 80 columns * 9px per char + 40px padding
