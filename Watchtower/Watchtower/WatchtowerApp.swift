@@ -35,6 +35,11 @@ struct WatchtowerApp: App {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Set dark appearance at the app level so all windows (including
+        // the titlebar chrome, traffic lights, and title text) render
+        // correctly against the dark terminal background.
+        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+
         // Configure all existing windows immediately
         for window in NSApp.windows {
             configureWindow(window)
