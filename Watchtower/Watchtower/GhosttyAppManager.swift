@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import os
 
 /// Singleton that manages the Ghostty app-level state (ghostty_app_t).
@@ -462,16 +463,47 @@ class GhosttyAppManager: ObservableObject {
         confirm: Bool
     ) {
         guard let content = content, len > 0 else { return }
-        
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        
-        // Write each content item
+
+        // Parse all content items from the C array
+        struct ClipboardItem {
+            let mime: String
+            let data: String
+            let pasteboardType: NSPasteboard.PasteboardType
+        }
+
+        var items: [ClipboardItem] = []
         for i in 0..<len {
             let item = content[i]
-            guard let dataPtr = item.data else { continue }
+            guard let mimePtr = item.mime,
+                  let dataPtr = item.data else { continue }
+            let mime = String(cString: mimePtr)
             let data = String(cString: dataPtr)
-            pasteboard.setString(data, forType: .string)
+            guard let pbType = pasteboardType(fromMime: mime) else { continue }
+            items.append(ClipboardItem(mime: mime, data: data, pasteboardType: pbType))
+        }
+        guard !items.isEmpty else { return }
+
+        let pasteboard = NSPasteboard.general
+
+        // Declare all types upfront, then set data for each
+        let types = items.map { $0.pasteboardType }
+        pasteboard.declareTypes(types, owner: nil)
+        for item in items {
+            pasteboard.setString(item.data, forType: item.pasteboardType)
+        }
+    }
+
+    /// Convert a MIME type string to an NSPasteboard.PasteboardType.
+    private static func pasteboardType(fromMime mime: String) -> NSPasteboard.PasteboardType? {
+        switch mime {
+        case "text/plain":
+            return .string
+        default:
+            // Try to resolve via UTType, fall back to using the MIME string directly
+            if let utType = UTType(mimeType: mime) {
+                return NSPasteboard.PasteboardType(utType.identifier)
+            }
+            return NSPasteboard.PasteboardType(mime)
         }
     }
 
