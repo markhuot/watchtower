@@ -12,6 +12,38 @@ struct TerminalPaneView: View {
     var onHeaderTapped: (() -> Void)? = nil
     
     private let cornerRadius: CGFloat = 6
+
+    /// Whether the highlight should be shown at full intensity.
+    /// True only when the pane is focused AND the window is active.
+    private var isHighlightActive: Bool {
+        terminal.isFocused && appManager.isWindowActive
+    }
+
+    /// A dimmed version of the highlight for when the pane is focused
+    /// but the window is inactive.
+    private var isHighlightDimmed: Bool {
+        terminal.isFocused && !appManager.isWindowActive
+    }
+
+    /// The border color for the focus highlight, accounting for window activation state.
+    private var highlightBorderColor: Color {
+        if isHighlightActive {
+            return appManager.highlightColor
+        } else if isHighlightDimmed {
+            return appManager.highlightColor.opacity(0.3)
+        } else {
+            return Color.clear
+        }
+    }
+
+    /// The shadow color for the focus highlight glow.
+    private var highlightShadowColor: Color {
+        if isHighlightActive {
+            return appManager.highlightColor.opacity(0.6)
+        } else {
+            return Color.clear
+        }
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -36,21 +68,18 @@ struct TerminalPaneView: View {
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius)
                 .strokeBorder(
-                    terminal.isFocused
-                        ? appManager.highlightColor
-                        : Color.clear,
+                    highlightBorderColor,
                     lineWidth: 2
                 )
                 .shadow(
-                    color: terminal.isFocused
-                        ? appManager.highlightColor.opacity(0.6)
-                        : Color.clear,
+                    color: highlightShadowColor,
                     radius: 8
                 )
                 .allowsHitTesting(false)
         )
         .opacity(terminal.isDragging ? 0.5 : 1.0)
         .animation(.easeInOut(duration: 0.15), value: terminal.isFocused)
+        .animation(.easeInOut(duration: 0.15), value: appManager.isWindowActive)
         .animation(.easeInOut(duration: 0.15), value: terminal.isDragging)
     }
 }
@@ -71,6 +100,12 @@ struct TerminalHeaderView: View {
                 .lineLimit(1)
             
             Spacer()
+
+            // Current working directory (flush right)
+            Text(terminal.abbreviatedDirectory)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundColor(.white.opacity(0.5))
+                .lineLimit(1)
         }
         .padding(.horizontal, 12)
         .background(appManager.backgroundColor.opacity(0.8))

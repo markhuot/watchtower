@@ -358,13 +358,26 @@ class TerminalContainerViewModel: ObservableObject {
     }
 
     func addTerminal() {
+        // Inherit the working directory and pane width from the currently
+        // focused terminal, falling back to defaults when nothing is focused.
+        let focusedTerminal = terminals.first(where: { $0.isFocused })
+        let directory = focusedTerminal?.directory ?? NSHomeDirectory()
+        let paneWidth = focusedTerminal?.paneWidth ?? TerminalModel.defaultPaneWidth
+
         let terminal = TerminalModel(
             id: UUID(),
             title: "Terminal \(terminals.count + 1)",
             status: .running,
-            directory: NSHomeDirectory()
+            directory: directory,
+            paneWidth: paneWidth
         )
-        terminals.append(terminal)
+
+        // Insert after the currently focused pane, or append at the end if none is focused
+        if let focusedIndex = terminals.firstIndex(where: { $0.isFocused }) {
+            terminals.insert(terminal, at: focusedIndex + 1)
+        } else {
+            terminals.append(terminal)
+        }
 
         // Focus the new terminal after SwiftUI has time to create the view
         let newId = terminal.id

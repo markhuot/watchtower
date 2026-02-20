@@ -28,6 +28,9 @@ class GhosttyAppManager: ObservableObject {
     /// Highlight color for focused pane border, from Ghostty theme or system accent.
     @Published private(set) var highlightColor: Color = Color.accentColor
 
+    /// Whether the application window is currently active (key window in foreground).
+    @Published private(set) var isWindowActive: Bool = true
+
     /// The ghostty app instance. We only have one for the entire app.
     private(set) var app: ghostty_app_t? = nil
 
@@ -150,11 +153,13 @@ class GhosttyAppManager: ObservableObject {
     @objc private func applicationDidBecomeActive(notification: Notification) {
         guard let app = self.app else { return }
         ghostty_app_set_focus(app, true)
+        isWindowActive = true
     }
 
     @objc private func applicationDidResignActive(notification: Notification) {
         guard let app = self.app else { return }
         ghostty_app_set_focus(app, false)
+        isWindowActive = false
     }
 
     // MARK: - Static Callbacks
@@ -191,6 +196,9 @@ class GhosttyAppManager: ObservableObject {
         case GHOSTTY_ACTION_MOUSE_VISIBILITY:
             setMouseVisibility(app, target: target, v: action.action.mouse_visibility)
             return true
+
+        case GHOSTTY_ACTION_PWD:
+            return setPwd(app, target: target, v: action.action.pwd)
 
         case GHOSTTY_ACTION_NEW_SPLIT,
              GHOSTTY_ACTION_NEW_WINDOW,
@@ -277,6 +285,22 @@ class GhosttyAppManager: ObservableObject {
         }
         DispatchQueue.main.async {
             view.updateStatus(status)
+        }
+        return true
+    }
+
+    private static func setPwd(
+        _ app: ghostty_app_t,
+        target: ghostty_target_s,
+        v: ghostty_action_pwd_s
+    ) -> Bool {
+        guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
+        guard let surface = target.target.surface else { return false }
+        guard let view = surfaceView(from: surface) else { return false }
+        guard let pwdPtr = v.pwd else { return false }
+        let pwd = String(cString: pwdPtr)
+        DispatchQueue.main.async {
+            view.terminal.directory = pwd
         }
         return true
     }
