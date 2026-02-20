@@ -41,3 +41,27 @@ jobs:
         with:
           name: Watchtower.app
           path: build/Build/Products/Release/Watchtower.app
+
+      - name: Determine release version
+        if: github.ref == 'refs/heads/main'
+        id: version
+        run: |
+          PREFIX=$(date -u +"%Y.%m")
+          # Find the highest existing release number for this month
+          LAST=$(gh release list --limit 100 --json tagName --jq "[.[] | select(.tagName | startswith(\"${PREFIX}.\")) | .tagName | split(\".\")[2] | tonumber] | max // 0")
+          NEXT=$(printf "%02d" $((LAST + 1)))
+          echo "tag=${PREFIX}.${NEXT}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cd build/Build/Products/Release
+          zip -r -y Watchtower.app.zip Watchtower.app
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "Watchtower ${{ steps.version.outputs.tag }}" \
+            --generate-notes \
+            Watchtower.app.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
