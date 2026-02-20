@@ -22,7 +22,7 @@ jobs:
 
       - name: Build libghostty
         working-directory: ghostty
-        run: zig build -Doptimize=ReleaseFast -Demit-docs=false -Demit-xcframework=true
+        run: zig build -Doptimize=ReleaseFast -Demit-docs=false -Demit-xcframework=true -Demit-macos-app=false
 
       - name: Build Watchtower
         run: |

@@ -12,7 +12,7 @@ Watchtower is a macOS SwiftUI app embedding the Ghostty terminal emulator via it
 
 ```bash
 cd ghostty
-zig build -Doptimize=ReleaseFast -Demit-docs=false -Demit-xcframework=true
+zig build -Doptimize=ReleaseFast -Demit-docs=false -Demit-xcframework=true -Demit-macos-app=false
 ```
 
 - Requires Zig 0.15.2 (matches ghostty's `minimum_zig_version`)
