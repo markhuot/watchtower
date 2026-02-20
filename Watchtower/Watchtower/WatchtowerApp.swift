@@ -29,6 +29,13 @@ struct WatchtowerApp: App {
                     activeViewModel?.focusNextPane()
                 }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button(activeViewModel?.isFocusMode == true ? "Exit Focus Mode" : "Enter Focus Mode") {
+                    activeViewModel?.toggleFocusMode()
+                }
+                .keyboardShortcut(.return, modifiers: [.command, .shift])
             }
         }
     }

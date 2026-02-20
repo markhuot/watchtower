@@ -5,21 +5,41 @@ struct ContentView: View {
     @StateObject private var viewModel = TerminalContainerViewModel()
     @ObservedObject private var appManager = GhosttyAppManager.shared
 
+    /// Minimum width for focus mode: 150 columns using the same cell-width math.
+    private static let focusModeMinWidth: CGFloat = 150 * TerminalPaneWithHandle.estimatedCellWidth + 40
+
     var body: some View {
         GeometryReader { geometry in
-            ScrollView(.horizontal, showsIndicators: true) {
-                HStack(spacing: 0) {
-                    ForEach(viewModel.terminals) { terminal in
-                        TerminalPaneWithHandle(
-                            terminal: terminal,
-                            allTerminals: viewModel.terminals,
-                            viewModel: viewModel
-                        )
+            ScrollViewReader { scrollProxy in
+                ScrollView(.horizontal, showsIndicators: !viewModel.isFocusMode) {
+                    HStack(spacing: 0) {
+                        ForEach(viewModel.terminals) { terminal in
+                            FocusModeWrapper(
+                                terminal: terminal,
+                                viewModel: viewModel,
+                                focusModeMinWidth: ContentView.focusModeMinWidth
+                            ) {
+                                TerminalPaneWithHandle(
+                                    terminal: terminal,
+                                    allTerminals: viewModel.terminals,
+                                    viewModel: viewModel
+                                )
+                            }
+                            .id(terminal.id)
+                        }
+                    }
+                    .padding(10)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Scroll to the focused pane when entering focus mode
+                .onChange(of: viewModel.isFocusMode) { isFocused in
+                    if isFocused, let targetId = viewModel.focusModeTerminalId {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            scrollProxy.scrollTo(targetId, anchor: .center)
+                        }
                     }
                 }
-                .padding(10)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(appManager.backgroundColor.ignoresSafeArea())
         .focusedValue(\.terminalViewModel, viewModel)
@@ -34,6 +54,51 @@ struct ContentView: View {
                     Image(systemName: "plus")
                 }
             }
+        }
+    }
+}
+
+/// Wraps a terminal pane with focus-mode visual treatment (width override,
+/// dimming, shadow) without bloating the main ContentView body.
+struct FocusModeWrapper<Content: View>: View {
+    @ObservedObject var terminal: TerminalModel
+    @ObservedObject var viewModel: TerminalContainerViewModel
+    @ObservedObject private var appManager = GhosttyAppManager.shared
+    let focusModeMinWidth: CGFloat
+    let content: Content
+
+    init(terminal: TerminalModel,
+         viewModel: TerminalContainerViewModel,
+         focusModeMinWidth: CGFloat,
+         @ViewBuilder content: () -> Content) {
+        self.terminal = terminal
+        self.viewModel = viewModel
+        self.focusModeMinWidth = focusModeMinWidth
+        self.content = content()
+    }
+
+    private var isFocusModeTarget: Bool {
+        viewModel.isFocusMode && terminal.id == viewModel.focusModeTerminalId
+    }
+
+    var body: some View {
+        content
+            .frame(width: isFocusModeTarget
+                ? max(terminal.paneWidth, focusModeMinWidth)
+                : nil)
+            .overlay(focusModeDimOverlay)
+            .shadow(
+                color: isFocusModeTarget ? .black.opacity(0.6) : .clear,
+                radius: isFocusModeTarget ? 24 : 0,
+                x: 0, y: 0
+            )
+    }
+
+    @ViewBuilder
+    private var focusModeDimOverlay: some View {
+        if viewModel.isFocusMode && !isFocusModeTarget {
+            appManager.backgroundColor.opacity(0.8)
+                .allowsHitTesting(false)
         }
     }
 }
@@ -55,7 +120,7 @@ struct TerminalPaneWithHandle: View {
     private let minPaneWidth: CGFloat = 200
 
     /// Approximate cell width in points (matches TerminalModel.defaultPaneWidth calculation).
-    private static let estimatedCellWidth: CGFloat = 9
+    static let estimatedCellWidth: CGFloat = 9
 
     /// Snap a width to the nearest cell boundary to prevent sub-cell jitter.
     static func snapToGrid(_ width: CGFloat) -> CGFloat {
@@ -305,6 +370,14 @@ class TerminalContainerViewModel: ObservableObject {
     /// The ID of the terminal currently being dragged.
     @Published var draggedTerminalId: UUID? = nil
 
+    /// Whether focus mode is active. In focus mode the currently focused pane
+    /// floats above all other panes as a centered overlay.
+    @Published var isFocusMode: Bool = false
+
+    /// The ID of the terminal that was focused when focus mode was entered.
+    /// Stored so that switching focus exits focus mode cleanly.
+    @Published var focusModeTerminalId: UUID? = nil
+
     /// Event monitor for detecting when a drag session ends (mouse up).
     private var dragEndMonitor: Any? = nil
 
@@ -346,6 +419,32 @@ class TerminalContainerViewModel: ObservableObject {
         if let monitor = dragEndMonitor {
             NSEvent.removeMonitor(monitor)
             dragEndMonitor = nil
+        }
+    }
+
+    /// Toggle focus mode on the currently focused terminal.
+    /// If focus mode is already active, it is deactivated.
+    func toggleFocusMode() {
+        if isFocusMode {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isFocusMode = false
+                focusModeTerminalId = nil
+            }
+        } else {
+            guard let focused = terminals.first(where: { $0.isFocused }) else { return }
+            focusModeTerminalId = focused.id
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isFocusMode = true
+            }
+        }
+    }
+
+    /// Exit focus mode if it is currently active.
+    func exitFocusMode() {
+        guard isFocusMode else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isFocusMode = false
+            focusModeTerminalId = nil
         }
     }
 
@@ -404,6 +503,11 @@ class TerminalContainerViewModel: ObservableObject {
     }
 
     func removeTerminal(byId id: UUID) {
+        // Exit focus mode if the removed terminal was the focus-mode target
+        if id == focusModeTerminalId {
+            exitFocusMode()
+        }
+
         guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
 
         // Determine which terminal to focus after removal.
