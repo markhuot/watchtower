@@ -22,15 +22,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(appManager.backgroundColor.ignoresSafeArea())
-        .onReceive(NotificationCenter.default.publisher(for: .addTerminal)) { _ in
-            viewModel.addTerminal()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .focusPreviousPane)) { _ in
-            viewModel.focusPreviousPane()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .focusNextPane)) { _ in
-            viewModel.focusNextPane()
-        }
+        .focusedValue(\.terminalViewModel, viewModel)
         .onReceive(NotificationCenter.default.publisher(for: .ghosttySurfaceClosed)) { notification in
             if let view = notification.object as? GhosttyTerminalNSView {
                 viewModel.removeTerminal(byId: view.terminal.id)
