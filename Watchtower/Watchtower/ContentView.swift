@@ -21,7 +21,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(appManager.backgroundColor)
+        .background(appManager.backgroundColor.ignoresSafeArea())
         .onReceive(NotificationCenter.default.publisher(for: .addTerminal)) { _ in
             viewModel.addTerminal()
         }
@@ -37,7 +37,7 @@ struct ContentView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .automatic) {
+            ToolbarItem(placement: .primaryAction) {
                 Button(action: { viewModel.addTerminal() }) {
                     Image(systemName: "plus")
                 }
@@ -53,8 +53,11 @@ struct TerminalPaneWithHandle: View {
     let allTerminals: [TerminalModel]
     @ObservedObject var viewModel: TerminalContainerViewModel
 
-    /// Width at the moment the drag started.
-    @State private var dragStartWidth: CGFloat? = nil
+    /// The absolute X position of the mouse in window coordinates when the drag started,
+    /// along with the pane width at that moment. Using absolute coordinates avoids the
+    /// feedback loop where snap-to-grid moves the handle, which changes translation, which
+    /// causes jittery resizing.
+    @State private var dragAnchor: (startX: CGFloat, startWidth: CGFloat)? = nil
 
     /// Minimum pane width in points.
     private let minPaneWidth: CGFloat = 200
@@ -119,55 +122,60 @@ struct TerminalPaneWithHandle: View {
                     viewModel: viewModel
                 ))
 
-            // Right drop indicator
-            DropIndicatorView(isActive: showRightIndicator, targetSlot: index + 1, viewModel: viewModel)
+            // Gap between panes: drop indicator overlaid with a full-width resize handle.
+            // The resize handle's hit area covers the entire gap so dragging can start
+            // right at the pane edge.
+            ZStack {
+                // Drop indicator (visual only — the resize gesture on top takes priority)
+                DropIndicatorView(isActive: showRightIndicator, targetSlot: index + 1, viewModel: viewModel)
 
-            // Resize handle: a thin draggable strip on the right edge.
-            // The visual element is narrow but the hit area is wide for easier grabbing.
-            Rectangle()
-                .fill(Color.clear)
-                .frame(width: 6)
-                .padding(.horizontal, 8)
-                .contentShape(Rectangle())
-                .onHover { hovering in
-                    if hovering {
-                        NSCursor.resizeLeftRight.push()
-                    } else {
-                        NSCursor.pop()
+                // Resize handle: invisible but covers the full gap for hit testing.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
                     }
-                }
-                .gesture(
-                    DragGesture(minimumDistance: 1)
-                        .onChanged { value in
-                            if dragStartWidth == nil {
-                                dragStartWidth = terminal.paneWidth
-                            }
-
-                            let rawWidth = max(
-                                minPaneWidth,
-                                (dragStartWidth ?? terminal.paneWidth) + value.translation.width
-                            )
-
-                            // Snap to cell grid to prevent jitter
-                            let newWidth = TerminalPaneWithHandle.snapToGrid(rawWidth)
-
-                            // Check if option key is held
-                            let optionHeld = NSEvent.modifierFlags.contains(.option)
-
-                            if optionHeld {
-                                // Resize ALL terminals to the same width
-                                for t in allTerminals {
-                                    t.paneWidth = newWidth
+                    .gesture(
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { value in
+                                // On first event, record the mouse's absolute X and the
+                                // current pane width. All subsequent events compute the
+                                // delta from this fixed anchor, so the handle shifting
+                                // due to snap-to-grid never feeds back into the calc.
+                                if dragAnchor == nil {
+                                    dragAnchor = (startX: value.startLocation.x, startWidth: terminal.paneWidth)
                                 }
-                            } else {
-                                // Resize only this terminal
-                                terminal.paneWidth = newWidth
+
+                                let anchor = dragAnchor!
+                                let delta = value.location.x - anchor.startX
+                                let rawWidth = max(minPaneWidth, anchor.startWidth + delta)
+
+                                // Snap to cell grid to prevent sub-cell jitter
+                                let newWidth = TerminalPaneWithHandle.snapToGrid(rawWidth)
+
+                                // Check if option key is held
+                                let optionHeld = NSEvent.modifierFlags.contains(.option)
+
+                                if optionHeld {
+                                    // Resize ALL terminals to the same width
+                                    for t in allTerminals {
+                                        t.paneWidth = newWidth
+                                    }
+                                } else {
+                                    // Resize only this terminal
+                                    terminal.paneWidth = newWidth
+                                }
                             }
-                        }
-                        .onEnded { _ in
-                            dragStartWidth = nil
-                        }
-                )
+                            .onEnded { _ in
+                                dragAnchor = nil
+                            }
+                    )
+            }
+            .frame(width: 27) // 3px indicator + 12px padding each side
         }
     }
 }

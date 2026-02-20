@@ -4,6 +4,7 @@ import SwiftUI
 struct WatchtowerApp: App {
     // Initialize Ghostty at app launch
     @StateObject private var ghosttyManager = GhosttyAppManager.shared
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
         WindowGroup {
@@ -29,6 +30,40 @@ struct WatchtowerApp: App {
                 .keyboardShortcut(.rightArrow, modifiers: [.command])
             }
         }
+    }
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Configure all existing windows immediately
+        for window in NSApp.windows {
+            configureWindow(window)
+        }
+
+        // Observe future window creation
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeAvailable(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+    }
+
+    @objc func windowDidBecomeAvailable(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            configureWindow(window)
+        }
+    }
+
+    private func configureWindow(_ window: NSWindow) {
+        window.title = "Watchtower"
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = false
+        // Match the window background to the Ghostty terminal background
+        // so the titlebar blends seamlessly
+        let bgColor = GhosttyAppManager.shared.backgroundColor
+        window.backgroundColor = NSColor(bgColor)
     }
 }
 

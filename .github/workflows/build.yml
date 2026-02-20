@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build libghostty
+        working-directory: ghostty
+        run: zig build -Doptimize=ReleaseFast -Demit-docs=false -Demit-xcframework=true
+
+      - name: Build Watchtower
+        run: |
+          xcodebuild \
+            -project Watchtower.xcodeproj \
+            -scheme Watchtower \
+            -configuration Release \
+            -arch arm64 \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_ALLOWED=YES \
+            build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Watchtower.app
+          path: build/Build/Products/Release/Watchtower.app
