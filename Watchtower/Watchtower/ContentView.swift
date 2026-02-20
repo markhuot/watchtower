@@ -359,7 +359,7 @@ class TerminalContainerViewModel: ObservableObject {
         let terminal = TerminalModel(
             id: UUID(),
             title: "Terminal \(terminals.count + 1)",
-            status: .running,
+            status: .active,
             directory: directory,
             paneWidth: paneWidth
         )

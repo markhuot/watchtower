@@ -33,7 +33,10 @@ class TerminalModel: Identifiable, ObservableObject {
 }
 
 enum TerminalStatus {
-    case running
-    case succeeded
+    /// The surface has an active foreground process (e.g. vim, a build).
+    case active
+    /// The surface is idle at a shell prompt — no foreground process running.
+    case idle
+    /// The child process exited with a non-zero exit code.
     case failed
 }

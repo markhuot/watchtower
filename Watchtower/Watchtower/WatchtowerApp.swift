@@ -23,12 +23,12 @@ struct WatchtowerApp: App {
                 Button("Focus Previous Pane") {
                     activeViewModel?.focusPreviousPane()
                 }
-                .keyboardShortcut(.leftArrow, modifiers: [.command])
+                .keyboardShortcut("[", modifiers: [.command, .shift])
 
                 Button("Focus Next Pane") {
                     activeViewModel?.focusNextPane()
                 }
-                .keyboardShortcut(.rightArrow, modifiers: [.command])
+                .keyboardShortcut("]", modifiers: [.command, .shift])
             }
         }
     }

@@ -124,9 +124,9 @@ struct StatusCircle: View {
     
     private var statusColor: Color {
         switch status {
-        case .running:
+        case .active:
             return .yellow
-        case .succeeded:
+        case .idle:
             return .green
         case .failed:
             return .red
@@ -139,7 +139,7 @@ struct TerminalPaneView_Previews: PreviewProvider {
         TerminalPaneView(terminal: TerminalModel(
             id: UUID(),
             title: "vim",
-            status: .running,
+            status: .active,
             directory: "/Users/username/projects"
         ))
         .frame(width: 760, height: 600)

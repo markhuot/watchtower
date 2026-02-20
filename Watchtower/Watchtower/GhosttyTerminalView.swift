@@ -195,6 +195,13 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         }
 
         Self.logger.info("Created Ghostty surface for terminal: \(self.terminal.title)")
+
+        // Schedule an initial status check after the surface has had time to
+        // initialize.  This ensures the icon reflects the actual Ghostty state
+        // rather than the hard-coded `.active` default.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.refreshStatusFromSurface()
+        }
     }
 
     // MARK: - Public API
@@ -205,6 +212,16 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
 
     func updateStatus(_ status: TerminalStatus) {
         terminal.status = status
+    }
+
+    /// Query Ghostty's own surface state to determine whether the surface
+    /// has an active foreground process. This is the same check used by
+    /// the window-close confirmation, ensuring the status icon stays in
+    /// sync with that behavior.
+    func refreshStatusFromSurface() {
+        guard let surface = surface else { return }
+        let needsConfirm = ghostty_surface_needs_confirm_quit(surface)
+        terminal.status = needsConfirm ? .active : .idle
     }
 
     func updateTerminal(_ terminal: TerminalModel) {

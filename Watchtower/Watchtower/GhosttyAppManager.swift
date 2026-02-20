@@ -258,7 +258,7 @@ class GhosttyAppManager: ObservableObject {
         guard let surface = target.target.surface else { return false }
         guard let view = surfaceView(from: surface) else { return false }
         let exitCode = v.exit_code
-        let status: TerminalStatus = exitCode == 0 ? .succeeded : .failed
+        let status: TerminalStatus = exitCode == 0 ? .idle : .failed
         DispatchQueue.main.async {
             view.updateStatus(status)
         }
@@ -273,18 +273,8 @@ class GhosttyAppManager: ObservableObject {
         guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
         guard let surface = target.target.surface else { return false }
         guard let view = surfaceView(from: surface) else { return false }
-        let exitCode = v.exit_code
-        let status: TerminalStatus
-        if exitCode < 0 {
-            // -1 means no exit code reported, treat as still running
-            status = .running
-        } else if exitCode == 0 {
-            status = .succeeded
-        } else {
-            status = .failed
-        }
         DispatchQueue.main.async {
-            view.updateStatus(status)
+            view.refreshStatusFromSurface()
         }
         return true
     }
@@ -301,6 +291,7 @@ class GhosttyAppManager: ObservableObject {
         let pwd = String(cString: pwdPtr)
         DispatchQueue.main.async {
             view.terminal.directory = pwd
+            view.refreshStatusFromSurface()
         }
         return true
     }
