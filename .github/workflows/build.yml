@@ -18,12 +18,21 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Cache libghostty
+        id: cache-libghostty
+        uses: actions/cache@v4
+        with:
+          path: ghostty/macos/GhosttyKit.xcframework
+          key: libghostty-${{ runner.os }}-${{ hashFiles('.gitmodules', 'ghostty/**/*.zig', 'ghostty/**/*.zon', 'ghostty/build.zig', 'ghostty/build.zig.zon') }}
+
       - name: Install Zig
+        if: steps.cache-libghostty.outputs.cache-hit != 'true'
         uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
 
       - name: Build libghostty
+        if: steps.cache-libghostty.outputs.cache-hit != 'true'
         working-directory: ghostty
         run: zig build -Doptimize=ReleaseFast -Demit-docs=false -Demit-xcframework=true -Demit-macos-app=false
 
