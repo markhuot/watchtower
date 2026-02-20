@@ -24,6 +24,7 @@ jobs:
         with:
           path: ghostty/macos/GhosttyKit.xcframework
           key: libghostty-${{ runner.os }}-${{ hashFiles('.gitmodules', 'ghostty/**/*.zig', 'ghostty/**/*.zon', 'ghostty/build.zig', 'ghostty/build.zig.zon') }}
+          save-always: true
 
       - name: Install Zig
         if: steps.cache-libghostty.outputs.cache-hit != 'true'
