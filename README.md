@@ -1,5 +1,7 @@
 # Watchtower
 
+![Watchtower screenshot](resources/screenshot.png)
+
 A macOS terminal app for AI-assisted development workflows. Multiple 80-column terminals in a horizontally scrolling layout, powered by [Ghostty](https://github.com/ghostty-org/ghostty).
 
 ## Building
