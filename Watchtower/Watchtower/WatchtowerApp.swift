@@ -12,6 +12,7 @@ struct WatchtowerApp: App {
             ContentView()
                 .environmentObject(ghosttyManager)
         }
+        .defaultSize(width: 1960, height: 1000)
         .commands {
             CommandGroup(after: .newItem) {
                 Button("New Terminal") {

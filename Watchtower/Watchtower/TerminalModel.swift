@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 class TerminalModel: Identifiable, ObservableObject {
     let id: UUID
@@ -8,6 +9,10 @@ class TerminalModel: Identifiable, ObservableObject {
     @Published var isFocused: Bool = false
     @Published var isDragging: Bool = false
     @Published var directory: String
+
+    /// The current git branch name for this terminal's working directory.
+    /// `nil` when not inside a git repository.
+    @Published var gitBranch: String? = nil
 
     /// Optional command to run instead of the default shell.
     /// When set, this becomes the process running inside the terminal.
@@ -22,6 +27,12 @@ class TerminalModel: Identifiable, ObservableObject {
 
     /// Default pane width: 80 columns * 9px per char + 40px padding
     static let defaultPaneWidth: CGFloat = 80 * 9 + 40
+
+    /// In-flight git branch detection task, cancelled when directory changes.
+    private var branchDetectionTask: Task<Void, Never>? = nil
+
+    /// Combine subscription for directory changes.
+    private var cancellables = Set<AnyCancellable>()
 
     /// The directory path with the home directory prefix replaced by `~`.
     var abbreviatedDirectory: String {
@@ -52,6 +63,30 @@ class TerminalModel: Identifiable, ObservableObject {
         self.command = command
         self.env = env
         self.waitAfterCommand = waitAfterCommand
+
+        // Reactively detect git branch whenever directory changes
+        $directory
+            .removeDuplicates()
+            .sink { [weak self] dir in
+                self?.detectGitBranch(for: dir)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Detect the git branch for the given directory asynchronously.
+    private func detectGitBranch(for directory: String) {
+        branchDetectionTask?.cancel()
+        branchDetectionTask = Task { @MainActor [weak self] in
+            let root = await WorkspaceManager.detectGitRepoRoot(for: directory)
+            guard !Task.isCancelled else { return }
+            if root != nil {
+                let branch = await WorkspaceManager.currentBranch(for: directory)
+                guard !Task.isCancelled else { return }
+                self?.gitBranch = branch
+            } else {
+                self?.gitBranch = nil
+            }
+        }
     }
 }
 

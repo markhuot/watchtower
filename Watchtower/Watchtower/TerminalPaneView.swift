@@ -101,8 +101,8 @@ struct TerminalHeaderView: View {
             
             Spacer()
 
-            // Current working directory (flush right)
-            Text(terminal.abbreviatedDirectory)
+            // Current working directory and git branch (flush right)
+            Text(terminal.abbreviatedDirectory + (terminal.gitBranch.map { ":" + $0 } ?? ""))
                 .font(.system(size: 13, weight: .regular))
                 .foregroundColor(.white.opacity(0.5))
                 .lineLimit(1)
