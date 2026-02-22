@@ -14,6 +14,9 @@
 		AA0000010000000000000005 /* GhosttyTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000005 /* GhosttyTerminalView.swift */; };
 		AA0000010000000000000006 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000006 /* Assets.xcassets */; };
 		AA0000010000000000000010 /* GhosttyAppManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000010 /* GhosttyAppManager.swift */; };
+		AA0000010000000000000011 /* WordList.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000011 /* WordList.swift */; };
+		AA0000010000000000000012 /* WorkspaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000012 /* WorkspaceManager.swift */; };
+		AA0000010000000000000013 /* WorkspaceDialogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000013 /* WorkspaceDialogView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,6 +30,9 @@
 		AA0000020000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA0000020000000000000009 /* GhosttyBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GhosttyBridge.h; sourceTree = "<group>"; };
 		AA0000020000000000000010 /* GhosttyAppManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyAppManager.swift; sourceTree = "<group>"; };
+		AA0000020000000000000011 /* WordList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordList.swift; sourceTree = "<group>"; };
+		AA0000020000000000000012 /* WorkspaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManager.swift; sourceTree = "<group>"; };
+		AA0000020000000000000013 /* WorkspaceDialogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceDialogView.swift; sourceTree = "<group>"; };
 		AA0000030000000000000001 /* Watchtower.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Watchtower.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -62,6 +68,9 @@
 				AA0000020000000000000008 /* Info.plist */,
 				AA0000020000000000000009 /* GhosttyBridge.h */,
 				AA0000020000000000000010 /* GhosttyAppManager.swift */,
+				AA0000020000000000000011 /* WordList.swift */,
+				AA0000020000000000000012 /* WorkspaceManager.swift */,
+				AA0000020000000000000013 /* WorkspaceDialogView.swift */,
 			);
 			path = Watchtower/Watchtower;
 			sourceTree = "<group>";
@@ -149,6 +158,9 @@
 				AA0000010000000000000004 /* TerminalPaneView.swift in Sources */,
 				AA0000010000000000000005 /* GhosttyTerminalView.swift in Sources */,
 				AA0000010000000000000010 /* GhosttyAppManager.swift in Sources */,
+				AA0000010000000000000011 /* WordList.swift in Sources */,
+				AA0000010000000000000012 /* WorkspaceManager.swift in Sources */,
+				AA0000010000000000000013 /* WorkspaceDialogView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

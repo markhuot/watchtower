@@ -18,6 +18,12 @@ struct WatchtowerApp: App {
                     activeViewModel?.addTerminal()
                 }
                 .keyboardShortcut("t", modifiers: [.command])
+
+                Button("New Workspace...") {
+                    activeViewModel?.showWorkspaceDialog = true
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(activeViewModel?.gitRepoRoot == nil)
             }
             CommandGroup(after: .toolbar) {
                 Button("Focus Previous Pane") {

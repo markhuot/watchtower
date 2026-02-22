@@ -183,10 +183,53 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
             surfaceConfig.scale_factor = 2.0
         }
 
-        // Set working directory
-        terminal.directory.withCString { cStr in
-            surfaceConfig.working_directory = cStr
-            self.surface = ghostty_surface_new(app, &surfaceConfig)
+        // Set wait_after_command for workspace terminals with custom scripts
+        if terminal.waitAfterCommand {
+            surfaceConfig.wait_after_command = true
+        }
+
+        // Allocate stable C strings for env vars using strdup.
+        // These are freed after ghostty_surface_new consumes them.
+        var envVarStructs: [ghostty_env_var_s] = []
+        var envAllocations: [UnsafeMutablePointer<CChar>] = []
+
+        if let env = terminal.env {
+            for (key, value) in env {
+                let cKey = strdup(key)!
+                let cVal = strdup(value)!
+                envAllocations.append(cKey)
+                envAllocations.append(cVal)
+                envVarStructs.append(ghostty_env_var_s(
+                    key: UnsafePointer(cKey),
+                    value: UnsafePointer(cVal)
+                ))
+            }
+        }
+
+        // Set working directory and optional command/env, then create surface
+        terminal.directory.withCString { cDir in
+            surfaceConfig.working_directory = cDir
+
+            envVarStructs.withUnsafeMutableBufferPointer { buf in
+                if !buf.isEmpty {
+                    surfaceConfig.env_vars = buf.baseAddress
+                    surfaceConfig.env_var_count = buf.count
+                }
+
+                if let command = terminal.command {
+                    command.withCString { cCmd in
+                        surfaceConfig.command = cCmd
+                        self.surface = ghostty_surface_new(app, &surfaceConfig)
+                    }
+                } else {
+                    self.surface = ghostty_surface_new(app, &surfaceConfig)
+                }
+            }
+        }
+
+        // Free env var allocations
+        for ptr in envAllocations {
+            free(ptr)
         }
 
         guard surface != nil else {

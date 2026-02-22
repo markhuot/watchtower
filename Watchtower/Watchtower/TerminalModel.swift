@@ -9,6 +9,17 @@ class TerminalModel: Identifiable, ObservableObject {
     @Published var isDragging: Bool = false
     @Published var directory: String
 
+    /// Optional command to run instead of the default shell.
+    /// When set, this becomes the process running inside the terminal.
+    let command: String?
+
+    /// Optional environment variables to pass to the terminal process.
+    let env: [String: String]?
+
+    /// Whether the terminal should stay open after the command exits.
+    /// Set to `true` for workspace terminals with custom scripts.
+    let waitAfterCommand: Bool
+
     /// Default pane width: 80 columns * 9px per char + 40px padding
     static let defaultPaneWidth: CGFloat = 80 * 9 + 40
 
@@ -23,12 +34,24 @@ class TerminalModel: Identifiable, ObservableObject {
         return directory
     }
 
-    init(id: UUID, title: String, status: TerminalStatus, directory: String, paneWidth: CGFloat = TerminalModel.defaultPaneWidth) {
+    init(
+        id: UUID,
+        title: String,
+        status: TerminalStatus,
+        directory: String,
+        paneWidth: CGFloat = TerminalModel.defaultPaneWidth,
+        command: String? = nil,
+        env: [String: String]? = nil,
+        waitAfterCommand: Bool = false
+    ) {
         self.id = id
         self.title = title
         self.status = status
         self.directory = directory
         self.paneWidth = paneWidth
+        self.command = command
+        self.env = env
+        self.waitAfterCommand = waitAfterCommand
     }
 }
 

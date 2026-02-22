@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
 
 struct ContentView: View {
     @StateObject private var viewModel = TerminalContainerViewModel()
@@ -50,9 +51,35 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button(action: { viewModel.addTerminal() }) {
-                    Image(systemName: "plus")
+                if viewModel.gitRepoRoot != nil {
+                    Menu {
+                        Button("New Terminal") {
+                            viewModel.addTerminal()
+                        }
+                        Button("New Workspace...") {
+                            viewModel.showWorkspaceDialog = true
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                    } primaryAction: {
+                        viewModel.addTerminal()
+                    }
+                } else {
+                    Button(action: { viewModel.addTerminal() }) {
+                        Image(systemName: "plus")
+                    }
                 }
+            }
+        }
+        .sheet(isPresented: $viewModel.showWorkspaceDialog) {
+            if let repoRoot = viewModel.gitRepoRoot {
+                WorkspaceDialogView(
+                    isPresented: $viewModel.showWorkspaceDialog,
+                    repoRoot: repoRoot,
+                    onSubmit: { name, branch in
+                        viewModel.createWorkspace(name: name, baseBranch: branch)
+                    }
+                )
             }
         }
     }
@@ -378,10 +405,53 @@ class TerminalContainerViewModel: ObservableObject {
     /// Stored so that switching focus exits focus mode cleanly.
     @Published var focusModeTerminalId: UUID? = nil
 
+    /// The git repo root for the currently focused terminal's directory.
+    /// `nil` when not in a git repo.
+    @Published var gitRepoRoot: String? = nil
+
+    /// Whether the workspace creation dialog is shown.
+    @Published var showWorkspaceDialog: Bool = false
+
     /// Event monitor for detecting when a drag session ends (mouse up).
     private var dragEndMonitor: Any? = nil
 
+    /// Subject that emits the currently focused terminal. Used to drive
+    /// the `switchToLatest` pipeline that tracks the focused terminal's
+    /// directory for git detection.
+    private let focusedTerminalSubject = CurrentValueSubject<TerminalModel?, Never>(nil)
+
+    /// Bag holding the Combine pipeline subscriptions.
+    private var cancellables = Set<AnyCancellable>()
+
+    /// In-flight git detection task, cancelled when focus/directory changes.
+    private var gitDetectionTask: Task<Void, Never>? = nil
+
     init() {
+        // Set up a Combine pipeline that:
+        // 1. Watches which terminal is focused (via focusedTerminalSubject)
+        // 2. switchToLatest subscribes to the focused terminal's $directory
+        // 3. On each new directory, runs git detection
+        focusedTerminalSubject
+            .compactMap { $0 }
+            .map { terminal in
+                terminal.$directory
+                    .removeDuplicates()
+            }
+            .switchToLatest()
+            .sink { [weak self] directory in
+                self?.detectGitRepo(for: directory)
+            }
+            .store(in: &cancellables)
+
+        // Also handle the nil case (no focused terminal) to clear gitRepoRoot
+        focusedTerminalSubject
+            .filter { $0 == nil }
+            .sink { [weak self] _ in
+                self?.gitDetectionTask?.cancel()
+                self?.gitRepoRoot = nil
+            }
+            .store(in: &cancellables)
+
         // Start with one terminal
         addTerminal()
     }
@@ -567,6 +637,11 @@ class TerminalContainerViewModel: ObservableObject {
 
     private func makeFocused(index: Int) {
         let terminal = terminals[index]
+
+        // Push the focused terminal into the subject so the Combine pipeline
+        // picks up its $directory publisher (and re-runs git detection).
+        focusedTerminalSubject.send(terminal)
+
         guard let window = NSApp.keyWindow,
               let contentView = window.contentView else { return }
 
@@ -587,6 +662,69 @@ class TerminalContainerViewModel: ObservableObject {
         // Match by terminal ID
         if let targetView = allViews.first(where: { $0.terminal.id == terminal.id }) {
             window.makeFirstResponder(targetView)
+        }
+    }
+
+    // MARK: - Git Detection
+
+    /// Run git detection for the given directory.
+    private func detectGitRepo(for directory: String) {
+        gitDetectionTask?.cancel()
+        gitDetectionTask = Task { @MainActor in
+            let root = await WorkspaceManager.detectGitRepoRoot(for: directory)
+            if !Task.isCancelled {
+                self.gitRepoRoot = root
+            }
+        }
+    }
+
+    // MARK: - Workspace Creation
+
+    /// Create a new workspace terminal with the given name and base branch.
+    func createWorkspace(name: String, baseBranch: String) {
+        guard let repoRoot = gitRepoRoot else { return }
+
+        let command = WorkspaceManager.buildCommand(
+            workspaceName: name,
+            baseBranch: baseBranch,
+            repoRoot: repoRoot
+        )
+        let env = WorkspaceManager.buildEnvVars(
+            workspaceName: name,
+            baseBranch: baseBranch,
+            repoRoot: repoRoot
+        )
+
+        let focusedTerminal = terminals.first(where: { $0.isFocused })
+        let paneWidth = focusedTerminal?.paneWidth ?? TerminalModel.defaultPaneWidth
+
+        // Determine if this is a custom script (sets wait_after_command)
+        let hasCustomScript = WorkspaceManager.findWorkspaceScript(repoRoot: repoRoot) != nil
+
+        let terminal = TerminalModel(
+            id: UUID(),
+            title: name,
+            status: .active,
+            directory: repoRoot,
+            paneWidth: paneWidth,
+            command: command,
+            env: env,
+            waitAfterCommand: hasCustomScript
+        )
+
+        // Insert after the currently focused pane
+        if let focusedIndex = terminals.firstIndex(where: { $0.isFocused }) {
+            terminals.insert(terminal, at: focusedIndex + 1)
+        } else {
+            terminals.append(terminal)
+        }
+
+        // Focus the new terminal
+        let newId = terminal.id
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let idx = self.terminals.firstIndex(where: { $0.id == newId }) else { return }
+            self.makeFocused(index: idx)
         }
     }
 }
