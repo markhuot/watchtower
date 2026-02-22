@@ -343,6 +343,52 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         return result
     }
 
+    /// Intercept the "Close" menu item (Cmd+W). When multiple terminal panes
+    /// exist, close just this pane via a notification. When this is the only
+    /// pane, fall through to the default window close.
+    @objc func performClose(_ sender: Any?) {
+        guard let window = self.window,
+              let contentView = window.contentView else {
+            window?.performClose(sender)
+            return
+        }
+
+        // Count sibling terminal views in the window.
+        let terminalViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
+
+        if terminalViews.count > 1 {
+            // Multiple panes — close just this one.
+            if let surface = surface, ghostty_surface_needs_confirm_quit(surface) {
+                let terminalId = terminal.id
+                let alert = NSAlert()
+                alert.messageText = "Close Terminal?"
+                alert.informativeText = "This terminal has an active session. Closing it will terminate the session."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Close")
+                alert.addButton(withTitle: "Cancel")
+
+                alert.beginSheetModal(for: window) { response in
+                    if response == .alertFirstButtonReturn {
+                        NotificationCenter.default.post(
+                            name: .closePaneRequested,
+                            object: nil,
+                            userInfo: ["terminalId": terminalId]
+                        )
+                    }
+                }
+            } else {
+                NotificationCenter.default.post(
+                    name: .closePaneRequested,
+                    object: nil,
+                    userInfo: ["terminalId": terminal.id]
+                )
+            }
+        } else {
+            // Single pane — let the window close normally.
+            window.performClose(sender)
+        }
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let surface = surface else { return }
@@ -725,6 +771,20 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
 
     override func doCommand(by selector: Selector) {
         // Prevent NSBeep for unhandled commands
+    }
+
+    // MARK: - View Hierarchy Helpers
+
+    /// Recursively find all GhosttyTerminalNSView instances in a view hierarchy.
+    static func findAllTerminalViews(in view: NSView) -> [GhosttyTerminalNSView] {
+        var results: [GhosttyTerminalNSView] = []
+        if let tv = view as? GhosttyTerminalNSView {
+            results.append(tv)
+        }
+        for subview in view.subviews {
+            results.append(contentsOf: findAllTerminalViews(in: subview))
+        }
+        return results
     }
 
     // MARK: - Mouse Events

@@ -523,4 +523,5 @@ class GhosttyAppManager: ObservableObject {
 
 extension Notification.Name {
     static let ghosttySurfaceClosed = Notification.Name("ghosttySurfaceClosed")
+    static let closePaneRequested = Notification.Name("closePaneRequested")
 }

@@ -49,6 +49,11 @@ struct ContentView: View {
                 viewModel.removeTerminal(byId: view.terminal.id)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .closePaneRequested)) { notification in
+            if let terminalId = notification.userInfo?["terminalId"] as? UUID {
+                viewModel.removeTerminal(byId: terminalId)
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 if viewModel.gitRepoRoot != nil {
@@ -645,19 +650,7 @@ class TerminalContainerViewModel: ObservableObject {
         guard let window = NSApp.keyWindow,
               let contentView = window.contentView else { return }
 
-        // Find all GhosttyTerminalNSViews in the window
-        func findAllTerminalViews(in view: NSView) -> [GhosttyTerminalNSView] {
-            var results: [GhosttyTerminalNSView] = []
-            if let tv = view as? GhosttyTerminalNSView {
-                results.append(tv)
-            }
-            for subview in view.subviews {
-                results.append(contentsOf: findAllTerminalViews(in: subview))
-            }
-            return results
-        }
-
-        let allViews = findAllTerminalViews(in: contentView)
+        let allViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
 
         // Match by terminal ID
         if let targetView = allViews.first(where: { $0.terminal.id == terminal.id }) {

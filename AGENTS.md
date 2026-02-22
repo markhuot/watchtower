@@ -33,13 +33,16 @@ All under `Watchtower/Watchtower/`:
 
 | File | Purpose |
 |---|---|
-| `WatchtowerApp.swift` | App entry point, initializes GhosttyAppManager |
-| `ContentView.swift` | Horizontal ScrollView of terminal panes |
+| `WatchtowerApp.swift` | App entry point, initializes GhosttyAppManager, menu commands via `@FocusedValue` |
+| `ContentView.swift` | Horizontal ScrollView of terminal panes, `TerminalContainerViewModel` |
 | `TerminalModel.swift` | Class (not struct) with @Published properties for terminal state |
 | `TerminalPaneView.swift` | Individual pane UI, uses GeometryReader to pass size |
 | `GhosttyTerminalView.swift` | NSView + NSTextInputClient + NSViewRepresentable wrapping a ghostty surface |
 | `GhosttyAppManager.swift` | Singleton managing `ghostty_app_t`, runtime callbacks |
 | `GhosttyBridge.h` | Bridging header, `#include`s ghostty.h |
+| `WorkspaceManager.swift` | Workspace persistence and management |
+| `WorkspaceDialogView.swift` | UI for creating/editing workspaces |
+| `WordList.swift` | Word list utility (used for workspace name generation) |
 
 ## Xcode Project
 
@@ -102,6 +105,28 @@ These were discovered during development and are already fixed in the current co
 - Mouse button enums: `GHOSTTY_MOUSE_LEFT` not `GHOSTTY_MOUSE_BUTTON_LEFT`
 - `ghostty_surface_mouse_pos` takes 4 args (surface, x, y, mods), not 3
 - `ghostty_surface_mouse_scroll` scroll mods param is `Int32`, not `ghostty_input_mods_e`
+
+## Non-Obvious Learnings
+
+### Adding New Swift Files
+
+Both `PBXBuildFile` and `PBXFileReference` entries must be added to `Watchtower.xcodeproj/project.pbxproj` for each new `.swift` file. Missing either will cause build failures.
+
+### LSP False Positives
+
+After editing files that use ghostty C types, SourceKit reports ~90+ "Cannot find type" errors for all ghostty C types. These are false positives from the bridging header not being resolved by SourceKit. Ignore them.
+
+### Menu Command Routing
+
+`WatchtowerApp.swift` and `ContentView.swift` must change together when adding menu commands. The command definition lives in WatchtowerApp via `@FocusedValue(\.terminalViewModel)` but the logic lives in `TerminalContainerViewModel` inside `ContentView.swift`.
+
+### Clipboard Callback
+
+`write_clipboard_cb` receives a MIME array of `ghostty_clipboard_content_s` (each with `.mime` and `.data`). Must declare ALL pasteboard types first, then set data for each. Requires `import UniformTypeIdentifiers` for `UTType(mimeType:)` conversion.
+
+### Programmatic Terminal Input
+
+`ghostty_surface_text(surface, ptr, len)` sends text/commands to a terminal surface programmatically. Workspace scripts use this via Ghostty's surface config `command` field rather than running before the terminal opens.
 
 ## Ghostty Reference Implementation
 
