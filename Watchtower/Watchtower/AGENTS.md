@@ -18,3 +18,14 @@ Non-obvious learnings specific to the Swift source files in this directory.
 
 - **Scripts as terminal commands**: Scripts become the terminal command via Ghostty's surface config `command` field rather than running before the terminal opens — avoids race conditions with the shell not being ready.
 - **Programmatic text input**: `ghostty_surface_text(surface, ptr, len)` sends text/commands to a terminal surface programmatically.
+
+## Ghostty Command Execution (surfaceConfig.command)
+
+- **Do NOT prefix commands with `exec`**: On macOS, Ghostty wraps shell commands as `/usr/bin/login ... /bin/bash --noprofile --norc -c "exec -l <command>"`. Adding your own `exec` produces `exec -l exec /path/to/script` which tries to find a binary named "exec" → `exec: not found`. The `exec -l` wrapping is Ghostty's job. See `ghostty/src/termio/Exec.zig:1515-1531`.
+- **User shell config is NOT loaded**: Ghostty uses `bash --noprofile --norc` for the command wrapper, so `~/.zshrc`, `~/.bash_profile`, etc. are never sourced. Commands that depend on user environment (TERM, PATH, SSH config) will fail. Workaround: wrap the command in `$SHELL -lic '<inner command>'` so the user's login shell boots with full config before running the script.
+- **Command type heuristic**: Ghostty's `config/command.zig` parses the command string — plain strings become `.shell` (wrapped in `/bin/sh -c`), `direct:` prefix becomes `.direct` (passed to execvp as argv). For action scripts, use the `.shell` path (no prefix) so shell expansion works.
+
+## Action System
+
+- **Action discovery pipeline**: Wired into the same Combine `switchToLatest` pipeline as git detection in `TerminalContainerViewModel`. Both re-run when the focused terminal's directory changes.
+- **Action deduplication**: Project actions (`.watchtower/actions/`) take precedence over global actions (`~/.config/watchtower/actions/`) when filenames match. The `id` field is the filename.

@@ -359,7 +359,6 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         if terminalViews.count > 1 {
             // Multiple panes — close just this one.
             if let surface = surface, ghostty_surface_needs_confirm_quit(surface) {
-                let terminalId = terminal.id
                 let alert = NSAlert()
                 alert.messageText = "Close Terminal?"
                 alert.informativeText = "This terminal has an active session. Closing it will terminate the session."
@@ -367,20 +366,19 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
                 alert.addButton(withTitle: "Close")
                 alert.addButton(withTitle: "Cancel")
 
-                alert.beginSheetModal(for: window) { response in
+                alert.beginSheetModal(for: window) { [weak self] response in
+                    guard let self = self else { return }
                     if response == .alertFirstButtonReturn {
                         NotificationCenter.default.post(
-                            name: .closePaneRequested,
-                            object: nil,
-                            userInfo: ["terminalId": terminalId]
+                            name: .ghosttySurfaceClosed,
+                            object: self
                         )
                     }
                 }
             } else {
                 NotificationCenter.default.post(
-                    name: .closePaneRequested,
-                    object: nil,
-                    userInfo: ["terminalId": terminal.id]
+                    name: .ghosttySurfaceClosed,
+                    object: self
                 )
             }
         } else {

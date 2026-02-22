@@ -25,3 +25,6 @@ Package.resolved
 ghostty/zig-out/
 ghostty/zig-cache/
 ghostty/.zig-cache/
+
+# Temporary working files (session exports, etc.)
+.tmp/

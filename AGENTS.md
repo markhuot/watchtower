@@ -40,8 +40,11 @@ All under `Watchtower/Watchtower/`:
 | `GhosttyTerminalView.swift` | NSView + NSTextInputClient + NSViewRepresentable wrapping a ghostty surface |
 | `GhosttyAppManager.swift` | Singleton managing `ghostty_app_t`, runtime callbacks |
 | `GhosttyBridge.h` | Bridging header, `#include`s ghostty.h |
-| `WorkspaceManager.swift` | Workspace persistence and management |
-| `WorkspaceDialogView.swift` | UI for creating/editing workspaces |
+| `WorkspaceManager.swift` | Git detection utilities (detectGitRepoRoot, currentBranch) |
+| `Action.swift` | Action model, ActionArgument, ActionInterpreter with command building |
+| `ActionParser.swift` | Parses script annotation comments (@name, @description, @argument, etc.) |
+| `ActionDiscovery.swift` | Discovers action scripts in .watchtower/actions/ and ~/.config/watchtower/actions/ |
+| `ActionDialogView.swift` | SwiftUI dialog for action arguments with async default/options resolution |
 | `WordList.swift` | Word list utility (used for workspace name generation) |
 
 ## Xcode Project
@@ -110,7 +113,7 @@ These were discovered during development and are already fixed in the current co
 
 ### Adding New Swift Files
 
-Both `PBXBuildFile` and `PBXFileReference` entries must be added to `Watchtower.xcodeproj/project.pbxproj` for each new `.swift` file. Missing either will cause build failures.
+Both `PBXBuildFile` and `PBXFileReference` entries must be added to `Watchtower.xcodeproj/project.pbxproj` for each new `.swift` file. There are four places to update: PBXBuildFile section, PBXFileReference section, PBXGroup children list, and PBXSourcesBuildPhase files list. Missing any will cause build failures. Similarly, removing a file requires removing from all four places.
 
 ### LSP False Positives
 
@@ -142,6 +145,5 @@ Useful files in `ghostty/macos/Sources/Ghostty/`:
 ## Current State
 
 - Build succeeds (both ghostty lib and Watchtower app)
-- Not yet tested at runtime
 - App sandbox is enabled with network client access; PTY spawning may need entitlement changes
 - There are old `Eyes/` source files in the repo that should be ignored (the active code is in `Watchtower/Watchtower/`)

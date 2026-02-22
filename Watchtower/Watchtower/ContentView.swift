@@ -49,42 +49,67 @@ struct ContentView: View {
                 viewModel.removeTerminal(byId: view.terminal.id)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .closePaneRequested)) { notification in
-            if let terminalId = notification.userInfo?["terminalId"] as? UUID {
-                viewModel.removeTerminal(byId: terminalId)
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                if viewModel.gitRepoRoot != nil {
+                if viewModel.actions.isEmpty {
+                    Button(action: { viewModel.addTerminal() }) {
+                        Image(systemName: "plus")
+                    }
+                } else {
                     Menu {
                         Button("New Terminal") {
                             viewModel.addTerminal()
                         }
-                        Button("New Workspace...") {
-                            viewModel.showWorkspaceDialog = true
+
+                        Divider()
+
+                        // Project actions
+                        ForEach(viewModel.projectActions) { action in
+                            actionMenuButton(action)
+                        }
+
+                        // Separator between project and global actions
+                        if !viewModel.projectActions.isEmpty && !viewModel.globalActions.isEmpty {
+                            Divider()
+                        }
+
+                        // Global actions
+                        ForEach(viewModel.globalActions) { action in
+                            actionMenuButton(action)
                         }
                     } label: {
                         Image(systemName: "plus")
                     } primaryAction: {
                         viewModel.addTerminal()
                     }
-                } else {
-                    Button(action: { viewModel.addTerminal() }) {
-                        Image(systemName: "plus")
-                    }
                 }
             }
         }
-        .sheet(isPresented: $viewModel.showWorkspaceDialog) {
-            if let repoRoot = viewModel.gitRepoRoot {
-                WorkspaceDialogView(
-                    isPresented: $viewModel.showWorkspaceDialog,
-                    repoRoot: repoRoot,
-                    onSubmit: { name, branch in
-                        viewModel.createWorkspace(name: name, baseBranch: branch)
+        .sheet(isPresented: $viewModel.showActionDialog) {
+            if let action = viewModel.pendingAction {
+                ActionDialogView(
+                    isPresented: $viewModel.showActionDialog,
+                    action: action,
+                    workingDirectory: viewModel.focusedDirectory,
+                    onRun: { fieldValues in
+                        viewModel.executeAction(action, withValues: fieldValues)
                     }
                 )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionMenuButton(_ action: Action) -> some View {
+        Button(action: {
+            viewModel.triggerAction(action)
+        }) {
+            VStack(alignment: .leading) {
+                Text(action.menuLabel)
+                if let desc = action.descriptionText {
+                    Text(desc)
+                        .font(.caption)
+                }
             }
         }
     }
@@ -414,15 +439,36 @@ class TerminalContainerViewModel: ObservableObject {
     /// `nil` when not in a git repo.
     @Published var gitRepoRoot: String? = nil
 
-    /// Whether the workspace creation dialog is shown.
-    @Published var showWorkspaceDialog: Bool = false
+    /// Discovered actions for the focused terminal's project.
+    @Published var actions: [Action] = []
+
+    /// Whether the action dialog is shown.
+    @Published var showActionDialog: Bool = false
+
+    /// The action pending user input (shown in the dialog).
+    @Published var pendingAction: Action? = nil
+
+    /// Project-specific actions (non-global).
+    var projectActions: [Action] {
+        actions.filter { !$0.isGlobal }
+    }
+
+    /// Global actions.
+    var globalActions: [Action] {
+        actions.filter { $0.isGlobal }
+    }
+
+    /// The focused terminal's current working directory.
+    var focusedDirectory: String {
+        terminals.first(where: { $0.isFocused })?.directory ?? NSHomeDirectory()
+    }
 
     /// Event monitor for detecting when a drag session ends (mouse up).
     private var dragEndMonitor: Any? = nil
 
     /// Subject that emits the currently focused terminal. Used to drive
     /// the `switchToLatest` pipeline that tracks the focused terminal's
-    /// directory for git detection.
+    /// directory for git detection and action discovery.
     private let focusedTerminalSubject = CurrentValueSubject<TerminalModel?, Never>(nil)
 
     /// Bag holding the Combine pipeline subscriptions.
@@ -431,11 +477,14 @@ class TerminalContainerViewModel: ObservableObject {
     /// In-flight git detection task, cancelled when focus/directory changes.
     private var gitDetectionTask: Task<Void, Never>? = nil
 
+    /// In-flight action discovery task, cancelled when focus/directory changes.
+    private var actionDiscoveryTask: Task<Void, Never>? = nil
+
     init() {
         // Set up a Combine pipeline that:
         // 1. Watches which terminal is focused (via focusedTerminalSubject)
         // 2. switchToLatest subscribes to the focused terminal's $directory
-        // 3. On each new directory, runs git detection
+        // 3. On each new directory, runs git detection and action discovery
         focusedTerminalSubject
             .compactMap { $0 }
             .map { terminal in
@@ -445,15 +494,18 @@ class TerminalContainerViewModel: ObservableObject {
             .switchToLatest()
             .sink { [weak self] directory in
                 self?.detectGitRepo(for: directory)
+                self?.discoverActions(for: directory)
             }
             .store(in: &cancellables)
 
-        // Also handle the nil case (no focused terminal) to clear gitRepoRoot
+        // Also handle the nil case (no focused terminal) to clear state
         focusedTerminalSubject
             .filter { $0 == nil }
             .sink { [weak self] _ in
                 self?.gitDetectionTask?.cancel()
                 self?.gitRepoRoot = nil
+                self?.actionDiscoveryTask?.cancel()
+                self?.actions = []
             }
             .store(in: &cancellables)
 
@@ -671,38 +723,55 @@ class TerminalContainerViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Workspace Creation
+    // MARK: - Action Discovery
 
-    /// Create a new workspace terminal with the given name and base branch.
-    func createWorkspace(name: String, baseBranch: String) {
-        guard let repoRoot = gitRepoRoot else { return }
+    /// Discover actions for the given directory.
+    private func discoverActions(for directory: String) {
+        actionDiscoveryTask?.cancel()
+        actionDiscoveryTask = Task { @MainActor in
+            let discovered = await Task.detached {
+                ActionDiscovery.discoverActions(for: directory)
+            }.value
+            if !Task.isCancelled {
+                self.actions = discovered
+            }
+        }
+    }
 
-        let command = WorkspaceManager.buildCommand(
-            workspaceName: name,
-            baseBranch: baseBranch,
-            repoRoot: repoRoot
-        )
-        let env = WorkspaceManager.buildEnvVars(
-            workspaceName: name,
-            baseBranch: baseBranch,
-            repoRoot: repoRoot
-        )
+    // MARK: - Action Execution
+
+    /// Trigger an action. If it has arguments, show the dialog; otherwise execute immediately.
+    func triggerAction(_ action: Action) {
+        if action.hasArguments {
+            pendingAction = action
+            showActionDialog = true
+        } else {
+            executeAction(action, withValues: [:])
+        }
+    }
+
+    /// Execute an action with the given field values.
+    func executeAction(_ action: Action, withValues values: [String: String]) {
+        guard let command = ActionInterpreter.buildCommand(for: action) else { return }
 
         let focusedTerminal = terminals.first(where: { $0.isFocused })
+        let directory = focusedTerminal?.directory ?? NSHomeDirectory()
         let paneWidth = focusedTerminal?.paneWidth ?? TerminalModel.defaultPaneWidth
 
-        // Determine if this is a custom script (sets wait_after_command)
-        let hasCustomScript = WorkspaceManager.findWorkspaceScript(repoRoot: repoRoot) != nil
+        // Build environment variables
+        var env: [String: String] = values
+        env["WATCHTOWER_GIT_ROOT"] = gitRepoRoot ?? ""
+        env["WATCHTOWER_ACTION"] = action.id  // filename
 
         let terminal = TerminalModel(
             id: UUID(),
-            title: name,
+            title: action.displayName,
             status: .active,
-            directory: repoRoot,
+            directory: directory,
             paneWidth: paneWidth,
             command: command,
             env: env,
-            waitAfterCommand: hasCustomScript
+            waitAfterCommand: true
         )
 
         // Insert after the currently focused pane
