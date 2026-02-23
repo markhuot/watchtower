@@ -22,6 +22,13 @@ struct WatchtowerApp: App {
             }
 
             CommandGroup(after: .toolbar) {
+                Button("Command Palette") {
+                    activeViewModel?.toggleCommandPalette()
+                }
+                .keyboardShortcut("k", modifiers: [.command])
+
+                Divider()
+
                 Button("Focus Previous Pane") {
                     activeViewModel?.focusPreviousPane()
                 }
@@ -31,6 +38,18 @@ struct WatchtowerApp: App {
                     activeViewModel?.focusNextPane()
                 }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Move Pane Left") {
+                    activeViewModel?.movePaneLeft()
+                }
+                .keyboardShortcut("[", modifiers: [.command, .option])
+
+                Button("Move Pane Right") {
+                    activeViewModel?.movePaneRight()
+                }
+                .keyboardShortcut("]", modifiers: [.command, .option])
 
                 Divider()
 

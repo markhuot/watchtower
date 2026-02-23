@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct TerminalPaneView: View {
     @ObservedObject var terminal: TerminalModel
+    @ObservedObject var viewModel: TerminalContainerViewModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
 
     /// Called when a drag starts from this pane's title bar.
@@ -13,16 +14,22 @@ struct TerminalPaneView: View {
     
     private let cornerRadius: CGFloat = 6
 
+    /// Whether the command palette is open on this pane.
+    private var isPaletteOpenHere: Bool {
+        viewModel.commandPaletteTerminalId == terminal.id
+    }
+
     /// Whether the highlight should be shown at full intensity.
-    /// True only when the pane is focused AND the window is active.
+    /// True only when the pane is focused AND the window is active
+    /// AND the command palette is NOT open (palette draws its own outline).
     private var isHighlightActive: Bool {
-        terminal.isFocused && appManager.isWindowActive
+        terminal.isFocused && appManager.isWindowActive && !isPaletteOpenHere
     }
 
     /// A dimmed version of the highlight for when the pane is focused
     /// but the window is inactive.
     private var isHighlightDimmed: Bool {
-        terminal.isFocused && !appManager.isWindowActive
+        terminal.isFocused && !appManager.isWindowActive && !isPaletteOpenHere
     }
 
     /// The border color for the focus highlight, accounting for window activation state.
@@ -46,41 +53,62 @@ struct TerminalPaneView: View {
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Header — acts as drag handle with click-to-focus support
-            TerminalHeaderView(terminal: terminal)
-                .frame(height: 40)
-                .overlay(
-                    DragSourceView(
-                        terminal: terminal,
-                        onDragStarted: onDragStarted,
-                        onClicked: onHeaderTapped
+        ZStack(alignment: .top) {
+            // Existing pane content (header + terminal surface)
+            VStack(spacing: 0) {
+                // Header — acts as drag handle with click-to-focus support
+                TerminalHeaderView(terminal: terminal)
+                    .frame(height: 40)
+                    .overlay(
+                        DragSourceView(
+                            terminal: terminal,
+                            onDragStarted: onDragStarted,
+                            onClicked: onHeaderTapped
+                        )
                     )
-                )
-            
-            // Terminal content area - use GeometryReader to get accurate size
-            GeometryReader { geo in
-                GhosttyTerminalView(terminal: terminal, size: geo.size)
+                
+                // Terminal content area - use GeometryReader to get accurate size
+                GeometryReader { geo in
+                    GhosttyTerminalView(terminal: terminal, size: geo.size)
+                }
+            }
+            .background(appManager.backgroundColor)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(
+                        highlightBorderColor,
+                        lineWidth: 2
+                    )
+                    .shadow(
+                        color: highlightShadowColor,
+                        radius: 8
+                    )
+                    .allowsHitTesting(false)
+            )
+
+            // Command palette overlay (only on the pane it was opened from)
+            if isPaletteOpenHere {
+                // Dismiss layer — covers the pane area behind the palette
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        viewModel.dismissCommandPalette()
+                    }
+
+                // Palette itself — positioned below the header, centered
+                CommandPaletteView(viewModel: viewModel)
+                    .frame(maxWidth: min(500, terminal.paneWidth - 20))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 50)  // 40px header + 10px gap
+                    .transition(.opacity)
             }
         }
-        .background(appManager.backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .strokeBorder(
-                    highlightBorderColor,
-                    lineWidth: 2
-                )
-                .shadow(
-                    color: highlightShadowColor,
-                    radius: 8
-                )
-                .allowsHitTesting(false)
-        )
         .opacity(terminal.isDragging ? 0.5 : 1.0)
         .animation(.easeInOut(duration: 0.15), value: terminal.isFocused)
         .animation(.easeInOut(duration: 0.15), value: appManager.isWindowActive)
         .animation(.easeInOut(duration: 0.15), value: terminal.isDragging)
+        .animation(.easeOut(duration: 0.15), value: viewModel.commandPaletteTerminalId)
     }
 }
 
@@ -136,12 +164,15 @@ struct StatusCircle: View {
 
 struct TerminalPaneView_Previews: PreviewProvider {
     static var previews: some View {
-        TerminalPaneView(terminal: TerminalModel(
-            id: UUID(),
-            title: "vim",
-            status: .active,
-            directory: "/Users/username/projects"
-        ))
+        TerminalPaneView(
+            terminal: TerminalModel(
+                id: UUID(),
+                title: "vim",
+                status: .active,
+                directory: "/Users/username/projects"
+            ),
+            viewModel: TerminalContainerViewModel()
+        )
         .frame(width: 760, height: 600)
     }
 }

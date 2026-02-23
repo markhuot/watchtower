@@ -223,7 +223,7 @@ struct TerminalPaneWithHandle: View {
                 DropIndicatorView(isActive: showLeftIndicator, targetSlot: 0, viewModel: viewModel)
             }
 
-            TerminalPaneView(terminal: terminal, onDragStarted: {
+            TerminalPaneView(terminal: terminal, viewModel: viewModel, onDragStarted: {
                     viewModel.dragStarted(terminalId: terminal.id)
                 }, onHeaderTapped: {
                     viewModel.focusTerminal(id: terminal.id)
@@ -442,6 +442,17 @@ class TerminalContainerViewModel: ObservableObject {
     /// Discovered actions for the focused terminal's project.
     @Published var actions: [Action] = []
 
+    /// The ID of the terminal that the command palette is open on,
+    /// or `nil` when the palette is closed. Stored explicitly so the
+    /// palette stays visible even when the NSTextField steals first
+    /// responder from the terminal's NSView (which clears isFocused).
+    @Published var commandPaletteTerminalId: UUID? = nil
+
+    /// Convenience: whether the command palette is currently visible.
+    var isCommandPalettePresented: Bool {
+        commandPaletteTerminalId != nil
+    }
+
     /// Whether the action dialog is shown.
     @Published var showActionDialog: Bool = false
 
@@ -566,6 +577,81 @@ class TerminalContainerViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Command Palette
+
+    /// Toggle the command palette on/off.
+    func toggleCommandPalette() {
+        if isCommandPalettePresented {
+            dismissCommandPalette()
+        } else {
+            // Open the palette on the currently focused terminal
+            if let focused = terminals.first(where: { $0.isFocused }) {
+                commandPaletteTerminalId = focused.id
+            }
+        }
+    }
+
+    /// Dismiss the command palette and restore focus to the terminal.
+    /// - Parameter restoreFocus: When `true` (the default), first responder
+    ///   is returned to the terminal that had the palette. Pass `false` when
+    ///   the action being executed will manage focus itself (e.g. creating a
+    ///   new terminal).
+    func dismissCommandPalette(restoreFocus: Bool = true) {
+        guard let terminalId = commandPaletteTerminalId else { return }
+        commandPaletteTerminalId = nil
+
+        guard restoreFocus else { return }
+
+        // Restore focus to the terminal that had the palette.
+        // We need a two-phase delay: the first async lets SwiftUI process
+        // the state change and begin tearing down the palette's NSTextField.
+        // The second async ensures the text field has fully resigned first
+        // responder before we try to claim it for the terminal view.
+        DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self,
+                      let index = self.terminals.firstIndex(where: { $0.id == terminalId }) else { return }
+                self.makeFocused(index: index)
+            }
+        }
+    }
+
+    /// Close the currently focused terminal pane.
+    /// If multiple panes exist, closes just the focused one (with confirmation
+    /// if an active session is running). If it's the only pane, closes the window.
+    func closeCurrentPane() {
+        guard let focusedTerminal = terminals.first(where: { $0.isFocused }) else { return }
+        guard let window = NSApp.keyWindow,
+              let contentView = window.contentView else { return }
+
+        let terminalViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
+
+        if terminalViews.count > 1 {
+            // Multiple panes — find the focused NSView and check for active session.
+            if let targetView = terminalViews.first(where: { $0.terminal.id == focusedTerminal.id }),
+               let surface = targetView.surface,
+               ghostty_surface_needs_confirm_quit(surface) {
+                // Show confirmation alert, then call removeTerminal(byId:) on confirm.
+                let alert = NSAlert()
+                alert.messageText = "Close Terminal?"
+                alert.informativeText = "This terminal has an active session. Closing it will terminate the session."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Close")
+                alert.addButton(withTitle: "Cancel")
+                alert.beginSheetModal(for: window) { [weak self] response in
+                    if response == .alertFirstButtonReturn {
+                        self?.removeTerminal(byId: focusedTerminal.id)
+                    }
+                }
+            } else {
+                removeTerminal(byId: focusedTerminal.id)
+            }
+        } else {
+            // Single pane — close the window.
+            window.performClose(nil)
+        }
+    }
+
     /// Exit focus mode if it is currently active.
     func exitFocusMode() {
         guard isFocusMode else { return }
@@ -673,6 +759,7 @@ class TerminalContainerViewModel: ObservableObject {
     }
 
     func focusPreviousPane() {
+        if isCommandPalettePresented { dismissCommandPalette() }
         guard terminals.count > 1 else { return }
         let currentIndex = terminals.firstIndex(where: { $0.isFocused }) ?? 0
         let newIndex = (currentIndex - 1 + terminals.count) % terminals.count
@@ -680,14 +767,36 @@ class TerminalContainerViewModel: ObservableObject {
     }
 
     func focusNextPane() {
+        if isCommandPalettePresented { dismissCommandPalette() }
         guard terminals.count > 1 else { return }
         let currentIndex = terminals.firstIndex(where: { $0.isFocused }) ?? 0
         let newIndex = (currentIndex + 1) % terminals.count
         makeFocused(index: newIndex)
     }
 
+    /// Swap the focused pane one position to the left (wrapping around).
+    func movePaneLeft() {
+        guard terminals.count > 1 else { return }
+        guard let currentIndex = terminals.firstIndex(where: { $0.isFocused }) else { return }
+        let destIndex = (currentIndex - 1 + terminals.count) % terminals.count
+        guard destIndex != currentIndex else { return }
+        terminals.swapAt(currentIndex, destIndex)
+        makeFocused(index: destIndex)
+    }
+
+    /// Swap the focused pane one position to the right (wrapping around).
+    func movePaneRight() {
+        guard terminals.count > 1 else { return }
+        guard let currentIndex = terminals.firstIndex(where: { $0.isFocused }) else { return }
+        let destIndex = (currentIndex + 1) % terminals.count
+        guard destIndex != currentIndex else { return }
+        terminals.swapAt(currentIndex, destIndex)
+        makeFocused(index: destIndex)
+    }
+
     /// Focus a terminal by its ID (e.g. when the header is clicked).
     func focusTerminal(id: UUID) {
+        if isCommandPalettePresented { dismissCommandPalette() }
         guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
         makeFocused(index: index)
     }
