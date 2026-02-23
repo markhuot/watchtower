@@ -128,6 +128,26 @@ The `sessions` list should include every session that was referenced while writi
 
 **Where the next post should start:** Any sessions created after the ones listed in both post 1 and post 2 front matter. Run `opencode session list` and compare against all IDs in both posts.
 
+### Post 3: `2026-02-22-command-palette.md`
+
+**Covers:** The command palette feature (Cmd+K) from spec design through implementation, plus git branch display in pane headers and default window sizing.
+
+**Date range:** Feb 22, 2026.
+
+**Sessions covered:** 4 sessions (listed in front matter):
+- Command palette spec refinement (per-pane overlay design, fuzzy matching requirements, focus outline transfer)
+- Command palette implementation (FuzzyMatch.swift, CommandPaletteView.swift, 733 additions across 6 files)
+- Git branch display in pane headers (reactive Combine chain from OSC 7 through to SwiftUI)
+- Default window size (2.5 panes calculation, one-line change)
+
+**Key sessions:** `ses_37953b84bffetfzG6w2CcMj01W` (implementation), `ses_3796b4a54ffeIrRrUYShXs7MRe` (spec refinement)
+
+**Key technical topics:** Fuzzy matching algorithm with scoring heuristics, the focus-stealing bug (NSTextField taking first responder kills palette visibility), double-dispatch DispatchQueue.main.async for focus restoration, managesFocus flag for actions that control their own focus, ZStack layering outside clipShape.
+
+**Uncovered sessions from this period (8 total):** 4 were included in the post. The remaining 4 were: a meta-session writing blog post 2 (`ses_37a4996b8ffeGIefOzAmSTKpx0`), the session that wrote blog post 1 (`ses_37a7118a8ffekR9cJpGPeI8kmz`), a trivial SSH+tmux Q&A (`ses_37a660a3dffeztmG31qT3C5791`, 8 seconds), and an aborted blog writing attempt (`ses_37a7421bfffeERgP3oKs0GWiQU`).
+
+**Where the next post should start:** Any sessions created after the ones listed in posts 1, 2, and 3. Run `opencode session list` and compare against all IDs in all three posts.
+
 ## Tips
 
 - **Subagent parallelism is critical.** Each session JSON can be 500KB-30MB. Dispatching 6-8 `general` subagents in parallel to summarize sessions keeps the process from taking forever.
