@@ -360,10 +360,11 @@ struct BrowserWebView: NSViewRepresentable {
                     self.browser.url = url
 
                     // Record the visit to history.
-                    // Skip about:blank and deduplicate consecutive visits to the same URL.
-                    let urlString = url.absoluteString
-                    if urlString != "about:blank" && urlString != self.browser.lastRecordedURL {
-                        self.browser.lastRecordedURL = urlString
+                    // Skip about:blank and deduplicate consecutive visits to the same path
+                    // (query strings are stripped before storage).
+                    let cleanURL = HistoryStore.stripQueryString(from: url).absoluteString
+                    if cleanURL != "about:blank" && cleanURL != self.browser.lastRecordedURL {
+                        self.browser.lastRecordedURL = cleanURL
                         let source = self.browser.navigationSource
                         self.browser.navigationSource = "navigation"  // reset after consuming
                         let pageTitle = webView.title

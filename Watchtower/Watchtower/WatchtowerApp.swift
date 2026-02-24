@@ -15,13 +15,27 @@ struct WatchtowerApp: App {
         .defaultSize(width: 1960, height: 1000)
         .commands {
             CommandGroup(after: .newItem) {
+                // Context-aware: duplicates the type of the currently focused pane
+                Button("New Pane") {
+                    if let vm = activeViewModel {
+                        if vm.contextualPane is BrowserPaneModel {
+                            let browser = vm.addBrowser()
+                            vm.focusPane(browser)
+                        } else {
+                            let terminal = vm.addTerminal()
+                            vm.focusPane(terminal)
+                        }
+                    }
+                }
+                .keyboardShortcut("t", modifiers: [.command])
+
                 Button("New Terminal") {
                     if let vm = activeViewModel {
                         let terminal = vm.addTerminal()
                         vm.focusPane(terminal)
                     }
                 }
-                .keyboardShortcut("t", modifiers: [.command])
+                .keyboardShortcut("t", modifiers: [.command, .shift])
 
                 Button("New Browser") {
                     if let vm = activeViewModel {
@@ -29,6 +43,7 @@ struct WatchtowerApp: App {
                         vm.focusPane(browser)
                     }
                 }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
             }
 
             CommandGroup(after: .toolbar) {

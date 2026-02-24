@@ -733,6 +733,28 @@ class PaneContainerViewModel: ObservableObject {
         }
     }
 
+    /// Close all panes to the right of the currently focused pane.
+    /// Does nothing if the focused pane is already the last pane.
+    func closePanesToTheRight() {
+        guard let focusedPane = contextualPane,
+              let currentIndex = panes.firstIndex(where: { $0.id == focusedPane.id }) else { return }
+
+        let rightPanes = Array(panes.suffix(from: currentIndex + 1))
+        guard !rightPanes.isEmpty else { return }
+
+        // Exit focus mode if the focus-mode target is one of the panes being removed
+        if let fmId = focusModePaneId,
+           rightPanes.contains(where: { $0.id == fmId }) {
+            exitFocusMode()
+        }
+
+        // Remove all panes to the right
+        panes.removeSubrange((currentIndex + 1)...)
+
+        // Ensure the current pane is focused
+        focusPane(focusedPane)
+    }
+
     /// Exit focus mode if it is currently active.
     func exitFocusMode() {
         guard isFocusMode else { return }

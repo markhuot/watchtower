@@ -182,6 +182,9 @@ struct CommandPaletteView: View {
         items.append(.builtIn(name: "Close Pane", shortcut: "\u{2318}W") { vm in
             vm.closeCurrentPane()
         })
+        items.append(.builtIn(name: "Close Panes to the Right") { vm in
+            vm.closePanesToTheRight()
+        })
         items.append(.builtIn(name: "Toggle Full Screen", shortcut: "\u{2303}\u{2318}F") { vm in
             NSApp.keyWindow?.toggleFullScreen(nil)
         })
@@ -248,6 +251,10 @@ struct CommandPaletteView: View {
         // Clear Browsing History (always visible)
         items.append(.builtIn(name: "Clear Browsing History\u{2026}") { vm in
             guard let window = NSApp.keyWindow else { return }
+            // Capture the pane that should regain focus after the sheet dismisses.
+            // contextualPane resolves via commandPalettePaneId which is still set
+            // at this point (executeSelected runs the action before dismissing).
+            let paneToRefocus = vm.contextualPane
             let alert = NSAlert()
             alert.messageText = "Clear Browsing History?"
             alert.informativeText = "This will permanently delete all browsing history. This action cannot be undone."
@@ -257,6 +264,10 @@ struct CommandPaletteView: View {
             alert.beginSheetModal(for: window) { response in
                 if response == .alertFirstButtonReturn {
                     HistoryStore.shared.clearAll()
+                }
+                // The sheet steals focus from the pane; restore it on dismiss.
+                if let pane = paneToRefocus {
+                    vm.focusPane(pane)
                 }
             }
         })
@@ -548,27 +559,42 @@ struct CommandPaletteRow: View {
     let isSelected: Bool
     let highlightColor: Color
 
+    /// Maximum number of characters to display on a single line before truncating.
+    private let maxDisplayChars = 65
+
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
-                // Name with highlighted matched characters
-                highlightedText(
+                // Name with highlighted matched characters, truncated to one line
+                let nameTruncation = truncatedDisplayText(
                     item.item.displayName,
                     matchedIndices: item.nameMatch?.matchedIndices ?? [],
+                    maxChars: maxDisplayChars
+                )
+                highlightedText(
+                    nameTruncation.text,
+                    matchedIndices: nameTruncation.adjustedIndices,
                     baseColor: .white.opacity(0.9),
                     matchColor: highlightColor
                 )
                 .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
 
                 // Description subtitle
                 if let desc = item.item.description {
-                    highlightedText(
+                    let descTruncation = truncatedDisplayText(
                         desc,
                         matchedIndices: (item.nameMatch == nil) ? (item.descriptionMatch?.matchedIndices ?? []) : [],
+                        maxChars: maxDisplayChars
+                    )
+                    highlightedText(
+                        descTruncation.text,
+                        matchedIndices: descTruncation.adjustedIndices,
                         baseColor: .white.opacity(0.4),
                         matchColor: highlightColor.opacity(0.8)
                     )
                     .font(.system(size: 11))
+                    .lineLimit(1)
                 }
             }
 
@@ -601,6 +627,69 @@ struct CommandPaletteRow: View {
         )
         .cornerRadius(4)
         .padding(.horizontal, 4)
+    }
+
+    /// Result of truncating a display string to fit on one line.
+    private struct TruncatedText {
+        let text: String
+        let adjustedIndices: [Int]
+    }
+
+    /// Truncate `text` to fit within `maxChars`, centering the visible window
+    /// on the last matched character when truncation is needed.
+    ///
+    /// - If the text fits within `maxChars`, returns it unchanged.
+    /// - Otherwise, computes a window of `maxChars` characters centered on the
+    ///   last matched index, prepending/appending "…" where text was clipped.
+    private func truncatedDisplayText(
+        _ text: String,
+        matchedIndices: [Int],
+        maxChars: Int
+    ) -> TruncatedText {
+        let chars = Array(text)
+        guard chars.count > maxChars else {
+            // Fits on one line — no truncation needed
+            return TruncatedText(text: text, adjustedIndices: matchedIndices)
+        }
+
+        // Determine the anchor point: last matched character, or 0 if no matches
+        let anchor = matchedIndices.max() ?? 0
+
+        // Reserve space for ellipsis characters (each "…" is 1 char)
+        // We'll compute the window, then decide which ellipses are needed
+        let halfWindow = maxChars / 2
+
+        // Center the window on the anchor
+        var windowStart = max(0, anchor - halfWindow)
+        var windowEnd = windowStart + maxChars
+
+        // Clamp to string bounds
+        if windowEnd > chars.count {
+            windowEnd = chars.count
+            windowStart = max(0, windowEnd - maxChars)
+        }
+
+        let needsLeadingEllipsis = windowStart > 0
+        let needsTrailingEllipsis = windowEnd < chars.count
+
+        // Shrink the window to make room for ellipsis characters
+        if needsLeadingEllipsis { windowStart += 1 }
+        if needsTrailingEllipsis { windowEnd -= 1 }
+
+        // Build the truncated string
+        var result = ""
+        if needsLeadingEllipsis { result += "\u{2026}" }
+        result += String(chars[windowStart..<windowEnd])
+        if needsTrailingEllipsis { result += "\u{2026}" }
+
+        // Remap matched indices into the new string's coordinate space
+        let ellipsisOffset = needsLeadingEllipsis ? 1 : 0
+        let adjustedIndices = matchedIndices.compactMap { idx -> Int? in
+            guard idx >= windowStart && idx < windowEnd else { return nil }
+            return idx - windowStart + ellipsisOffset
+        }
+
+        return TruncatedText(text: result, adjustedIndices: adjustedIndices)
     }
 
     /// Build an attributed text view with certain character indices highlighted.

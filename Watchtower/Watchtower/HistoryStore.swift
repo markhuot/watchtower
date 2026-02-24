@@ -29,6 +29,9 @@ class HistoryStore {
     private let queue = DispatchQueue(label: "com.watchtower.history", qos: .utility)
     private var pruneTimer: Timer?
 
+    /// Current schema version. Bump this to force a drop-and-recreate migration.
+    private static let schemaVersion = 2
+
     /// ISO 8601 formatter for database timestamps.
     private static let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -38,6 +41,7 @@ class HistoryStore {
 
     init() {
         openDatabase()
+        migrateIfNeeded()
         createSchema()
         pruneOldVisits()
         schedulePruneTimer()
@@ -76,7 +80,31 @@ class HistoryStore {
         }
     }
 
+    /// Check the stored schema version and drop all tables if it's outdated.
+    private func migrateIfNeeded() {
+        guard let db = db else { return }
+
+        // Read current version from PRAGMA user_version
+        var stmt: OpaquePointer?
+        var currentVersion = 0
+        if sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &stmt, nil) == SQLITE_OK {
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                currentVersion = Int(sqlite3_column_int(stmt, 0))
+            }
+        }
+        sqlite3_finalize(stmt)
+
+        if currentVersion < HistoryStore.schemaVersion {
+            // Drop the old table and recreate
+            try? execute("DROP TABLE IF EXISTS visits")
+            try? execute("PRAGMA user_version = \(HistoryStore.schemaVersion)")
+        }
+    }
+
     private func createSchema() {
+        // The `url` column stores the URL without query string or fragment
+        // (scheme + host + path only). This keeps URLs short for fuzzy matching
+        // and deduplicates pages that differ only by query parameters.
         let createTable = """
             CREATE TABLE IF NOT EXISTS visits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,15 +125,29 @@ class HistoryStore {
         try? execute(createIndexUrl)
     }
 
+    // MARK: - URL Normalization
+
+    /// Strip query string and fragment from a URL, keeping only scheme + host + path.
+    static func stripQueryString(from url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        components.query = nil
+        components.fragment = nil
+        return components.url ?? url
+    }
+
     // MARK: - Recording Visits
 
     /// Record a visit. Called from the WKNavigationDelegate on didFinish.
+    /// The URL is stored without query string or fragment.
     func recordVisit(url: URL, title: String?, source: String = "navigation") {
         queue.async { [weak self] in
             guard let self = self, let db = self.db else { return }
 
-            let urlString = url.absoluteString
-            let domain = url.host ?? url.absoluteString
+            let cleanURL = HistoryStore.stripQueryString(from: url)
+            let urlString = cleanURL.absoluteString
+            let domain = cleanURL.host ?? cleanURL.absoluteString
             let now = HistoryStore.isoFormatter.string(from: Date())
 
             let sql = "INSERT INTO visits (url, domain, title, visited_at, source) VALUES (?, ?, ?, ?, ?)"
@@ -132,14 +174,15 @@ class HistoryStore {
 
     // MARK: - Search
 
-    /// Search history for command palette results. Returns unique URLs,
-    /// most recently visited first, limited to `limit` results.
-    /// Loads all recent entries and applies in-memory fuzzy matching.
+    /// Search history for command palette results. Returns unique URLs (without
+    /// query strings), most recently visited first, limited to 500 results.
+    /// The caller applies in-memory fuzzy matching.
     func search(query: String, limit: Int = 20) -> [HistoryEntry] {
         guard let db = db else { return [] }
         guard !query.isEmpty else { return [] }
 
-        // Load deduplicated entries: most recent title per URL, visit count, most recent visit
+        // GROUP BY url — since we strip query strings at insert time,
+        // identical paths with different query params are already collapsed.
         let sql = """
             SELECT url, domain, title, MAX(visited_at) as last_visit, COUNT(*) as visit_count
             FROM visits
