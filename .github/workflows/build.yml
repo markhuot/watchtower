@@ -103,7 +103,7 @@ jobs:
           codesign --force --sign "Developer ID Application" \
             --timestamp \
             --options runtime \
-            "$APP/../../.."
+            "$APP/../.."
 
       - name: Notarize app
         if: github.ref == 'refs/heads/main'
