@@ -227,7 +227,7 @@ struct BrowserWebView: NSViewRepresentable {
 
     // MARK: - Coordinator
 
-    class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+    class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
         var browser: BrowserPaneModel
         weak var webView: WKWebView?
 
@@ -299,19 +299,29 @@ struct BrowserWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView,
                       decidePolicyFor navigationAction: WKNavigationAction,
-                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                      preferences: WKWebpagePreferences,
+                      decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
             let url = navigationAction.request.url?.absoluteString ?? "<nil>"
             let isTargetNil = navigationAction.targetFrame == nil
             logger.info("[decidePolicyFor action] url=\(url, privacy: .public) targetFrame=\(isTargetNil ? "nil" : "present", privacy: .public) navigationType=\(navigationAction.navigationType.rawValue)")
+
+            // If the navigation action itself indicates a download (e.g. the
+            // link has a `download` attribute), convert it to a download.
+            if navigationAction.shouldPerformDownload {
+                logger.info("[decidePolicyFor action] shouldPerformDownload=true — converting to download")
+                decisionHandler(.download, preferences)
+                return
+            }
+
             // Allow all navigations. Target=_blank opens in same web view.
             if navigationAction.targetFrame == nil {
                 // New window request — load in the same view
                 if let url = navigationAction.request.url {
                     webView.load(URLRequest(url: url))
                 }
-                decisionHandler(.cancel)
+                decisionHandler(.cancel, preferences)
             } else {
-                decisionHandler(.allow)
+                decisionHandler(.allow, preferences)
             }
         }
 
@@ -325,9 +335,25 @@ struct BrowserWebView: NSViewRepresentable {
                 DispatchQueue.main.async { [weak self] in
                     self?.browser.httpStatusCode = httpResponse.statusCode
                 }
+
+                // Check for Content-Disposition: attachment header
+                let contentDisposition = httpResponse.value(forHTTPHeaderField: "Content-Disposition") ?? ""
+                if contentDisposition.lowercased().hasPrefix("attachment") {
+                    logger.info("[decidePolicyFor response] Content-Disposition: attachment — converting to download")
+                    decisionHandler(.download)
+                    return
+                }
             } else {
                 logger.info("[decidePolicyFor response] url=\(url, privacy: .public) (not HTTP response)")
             }
+
+            // If WebKit cannot display the MIME type, convert to download
+            if !navigationResponse.canShowMIMEType {
+                logger.info("[decidePolicyFor response] canShowMIMEType=false — converting to download")
+                decisionHandler(.download)
+                return
+            }
+
             decisionHandler(.allow)
         }
 
@@ -423,6 +449,63 @@ struct BrowserWebView: NSViewRepresentable {
                     self?.browser.hasInteractedForms = true
                 }
             }
+        }
+
+        // MARK: - Download initiation (WKNavigationDelegate)
+
+        /// Called when `decidePolicyFor navigationAction` returns `.download`.
+        func webView(_ webView: WKWebView,
+                      navigationAction: WKNavigationAction,
+                      didBecome download: WKDownload) {
+            logger.info("[navigationAction didBecome download] url=\(download.originalRequest?.url?.absoluteString ?? "<nil>", privacy: .public)")
+            download.delegate = self
+        }
+
+        /// Called when `decidePolicyFor navigationResponse` returns `.download`.
+        func webView(_ webView: WKWebView,
+                      navigationResponse: WKNavigationResponse,
+                      didBecome download: WKDownload) {
+            logger.info("[navigationResponse didBecome download] url=\(download.originalRequest?.url?.absoluteString ?? "<nil>", privacy: .public)")
+            download.delegate = self
+        }
+
+        // MARK: - WKDownloadDelegate
+
+        func download(_ download: WKDownload,
+                      decideDestinationUsing response: URLResponse,
+                      suggestedFilename: String,
+                      completionHandler: @escaping (URL?) -> Void) {
+            logger.info("[download decideDestination] suggestedFilename=\(suggestedFilename, privacy: .public)")
+
+            DispatchQueue.main.async {
+                let savePanel = NSSavePanel()
+                savePanel.nameFieldStringValue = suggestedFilename
+                savePanel.canCreateDirectories = true
+
+                savePanel.begin { result in
+                    if result == .OK, let url = savePanel.url {
+                        logger.info("[download] User chose: \(url.path, privacy: .public)")
+                        // WKDownload requires that the destination file does NOT
+                        // already exist. NSSavePanel may prompt the user to
+                        // replace an existing file; in that case, remove it first.
+                        try? FileManager.default.removeItem(at: url)
+                        completionHandler(url)
+                    } else {
+                        logger.info("[download] User cancelled save panel")
+                        completionHandler(nil)
+                    }
+                }
+            }
+        }
+
+        func downloadDidFinish(_ download: WKDownload) {
+            logger.info("[download] Finished successfully: \(download.originalRequest?.url?.absoluteString ?? "<nil>", privacy: .public)")
+        }
+
+        func download(_ download: WKDownload,
+                      didFailWithError error: Error,
+                      resumeData: Data?) {
+            logger.error("[download] Failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
