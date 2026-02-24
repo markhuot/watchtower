@@ -300,20 +300,19 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         return result
     }
 
-    /// Intercept the "Close" menu item (Cmd+W). When multiple terminal panes
-    /// exist, close just this pane via a notification. When this is the only
-    /// pane, fall through to the default window close.
+    /// Intercept the "Close" menu item (Cmd+W). When multiple panes exist
+    /// (including browser panes), close just this pane via a notification.
+    /// When this is the only pane, fall through to the default window close.
     @objc func performClose(_ sender: Any?) {
-        guard let window = self.window,
-              let contentView = window.contentView else {
+        guard let window = self.window else {
             window?.performClose(sender)
             return
         }
 
-        // Count sibling terminal views in the window.
-        let terminalViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
+        // Count all panes (terminals + browsers) via the view model.
+        let totalPanes = terminal.viewModel?.panes.count ?? 0
 
-        if terminalViews.count > 1 {
+        if totalPanes > 1 {
             // Multiple panes — close just this one.
             if let surface = surface, ghostty_surface_needs_confirm_quit(surface) {
                 let alert = NSAlert()

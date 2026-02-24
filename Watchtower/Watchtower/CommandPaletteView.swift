@@ -15,7 +15,10 @@ struct CommandPaletteItem: Identifiable {
     let isQueryAction: Bool
     /// Preview text shown on the right side for query actions.
     let queryPreview: String?
-    let action: (PaneContainerViewModel) -> Void
+    /// The action closure receives the view model and a `forceNewPane` flag.
+    /// When `forceNewPane` is true (Cmd+Return), browser-navigation actions
+    /// should always open a new pane instead of navigating in-place.
+    let action: (PaneContainerViewModel, Bool) -> Void
 
     /// Create a built-in command item.
     static func builtIn(
@@ -30,7 +33,7 @@ struct CommandPaletteItem: Identifiable {
             sourceTag: nil,
             isQueryAction: false,
             queryPreview: nil,
-            action: action
+            action: { vm, _ in action(vm) }
         )
     }
 
@@ -38,7 +41,7 @@ struct CommandPaletteItem: Identifiable {
     static func queryAction(
         name: String,
         queryPreview: String,
-        action: @escaping (PaneContainerViewModel) -> Void
+        action: @escaping (PaneContainerViewModel, Bool) -> Void
     ) -> CommandPaletteItem {
         CommandPaletteItem(
             displayName: name,
@@ -62,7 +65,7 @@ struct CommandPaletteItem: Identifiable {
             sourceTag: actionModel.isGlobal ? "[global]" : "[project]",
             isQueryAction: false,
             queryPreview: nil,
-            action: { viewModel in
+            action: { viewModel, _ in
                 viewModel.triggerAction(actionModel)
             }
         )
@@ -77,8 +80,8 @@ struct CommandPaletteItem: Identifiable {
             sourceTag: "[history]",
             isQueryAction: false,
             queryPreview: nil,
-            action: { viewModel in
-                if let browser = viewModel.contextualPane as? BrowserPaneModel {
+            action: { viewModel, forceNewPane in
+                if !forceNewPane, let browser = viewModel.contextualPane as? BrowserPaneModel {
                     browser.navigationSource = "palette"
                     browser.navigate(to: entry.url)
                 } else {
@@ -344,9 +347,9 @@ struct CommandPaletteView: View {
             let goToURL = CommandPaletteItem.queryAction(
                 name: "Go to URL",
                 queryPreview: queryText
-            ) { vm in
+            ) { vm, forceNewPane in
                 guard let url = normalizeURL(queryText) else { return }
-                if let browser = vm.contextualPane as? BrowserPaneModel {
+                if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
                     browser.navigationSource = "address"
                     browser.navigate(to: url)
                 } else {
@@ -359,10 +362,10 @@ struct CommandPaletteView: View {
             let searchWeb = CommandPaletteItem.queryAction(
                 name: "Search the web",
                 queryPreview: queryText
-            ) { vm in
+            ) { vm, forceNewPane in
                 let encoded = queryText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? queryText
                 guard let url = URL(string: "https://duckduckgo.com/?q=\(encoded)") else { return }
-                if let browser = vm.contextualPane as? BrowserPaneModel {
+                if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
                     browser.navigate(to: url)
                 } else {
                     let browser = vm.addBrowser(url: url)
@@ -415,7 +418,9 @@ struct CommandPaletteView: View {
                 text: $filterText,
                 onArrowUp: { moveSelection(by: -1) },
                 onArrowDown: { moveSelection(by: 1) },
-                onSubmit: { executeSelected() },
+                onJumpUp: { jumpSectionUp() },
+                onJumpDown: { jumpSectionDown() },
+                onSubmit: { forceNewPane in executeSelected(forceNewPane: forceNewPane) },
                 onEscape: { viewModel.dismissCommandPalette() }
             )
             .frame(height: 36)
@@ -456,7 +461,7 @@ struct CommandPaletteView: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             selectedIndex = index
-                            executeSelected()
+                            executeSelected(forceNewPane: NSEvent.modifierFlags.contains(.command))
                         }
                     }
 
@@ -494,7 +499,31 @@ struct CommandPaletteView: View {
         selectedIndex = (selectedIndex + offset + count) % count
     }
 
-    private func executeSelected() {
+    /// Jump to the first item of the next section (Cmd+Down).
+    private func jumpSectionDown() {
+        guard !visibleItems.isEmpty else { return }
+        if let sep = queryActionSeparatorIndex, selectedIndex < sep {
+            // Currently in the top section -> jump to query actions
+            selectedIndex = sep
+        } else {
+            // Already in the bottom section or no separator -> go to last item
+            selectedIndex = visibleItems.count - 1
+        }
+    }
+
+    /// Jump to the first item of the previous section (Cmd+Up).
+    private func jumpSectionUp() {
+        guard !visibleItems.isEmpty else { return }
+        if let sep = queryActionSeparatorIndex, selectedIndex >= sep {
+            // Currently in the query action section -> jump to top
+            selectedIndex = 0
+        } else {
+            // Already in the top section -> go to first item
+            selectedIndex = 0
+        }
+    }
+
+    private func executeSelected(forceNewPane: Bool = false) {
         guard selectedIndex >= 0 && selectedIndex < visibleItems.count else { return }
         let item = visibleItems[selectedIndex].item
         // Snapshot the focus generation before the action runs.
@@ -504,7 +533,7 @@ struct CommandPaletteView: View {
         // Run the action BEFORE dismissing so that `contextualPane` can
         // still resolve via `commandPalettePaneId`. Actions that create
         // new panes call `focusPane()` which bumps `focusGeneration`.
-        item.action(viewModel)
+        item.action(viewModel, forceNewPane)
         // Dismiss tears down the palette UI. If the generation hasn't
         // changed (action didn't call focusPane), dismiss restores focus
         // to the original pane. Otherwise, the action's focus is preserved.
@@ -612,7 +641,9 @@ struct CommandPaletteTextField: NSViewRepresentable {
     @Binding var text: String
     var onArrowUp: () -> Void
     var onArrowDown: () -> Void
-    var onSubmit: () -> Void
+    var onJumpUp: () -> Void
+    var onJumpDown: () -> Void
+    var onSubmit: (Bool) -> Void  // Bool = forceNewPane (Cmd held)
     var onEscape: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -670,8 +701,17 @@ struct CommandPaletteTextField: NSViewRepresentable {
             case #selector(NSResponder.moveDown(_:)):
                 parent.onArrowDown()
                 return true
+            case #selector(NSResponder.moveToBeginningOfDocument(_:)):
+                // Cmd+Up — jump to previous section
+                parent.onJumpUp()
+                return true
+            case #selector(NSResponder.moveToEndOfDocument(_:)):
+                // Cmd+Down — jump to next section
+                parent.onJumpDown()
+                return true
             case #selector(NSResponder.insertNewline(_:)):
-                parent.onSubmit()
+                let cmdHeld = NSApp.currentEvent?.modifierFlags.contains(.command) ?? false
+                parent.onSubmit(cmdHeld)
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
                 parent.onEscape()
