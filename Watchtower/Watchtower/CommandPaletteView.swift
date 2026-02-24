@@ -67,6 +67,28 @@ struct CommandPaletteItem: Identifiable {
             }
         )
     }
+
+    /// Create an item from a browser history entry.
+    static func fromHistory(_ entry: HistoryEntry) -> CommandPaletteItem {
+        CommandPaletteItem(
+            displayName: entry.urlWithoutScheme,
+            description: entry.title,
+            shortcutText: nil,
+            sourceTag: "[history]",
+            isQueryAction: false,
+            queryPreview: nil,
+            action: { viewModel in
+                if let browser = viewModel.contextualPane as? BrowserPaneModel {
+                    browser.navigationSource = "palette"
+                    browser.navigate(to: entry.url)
+                } else {
+                    let browser = viewModel.addBrowser(url: entry.url)
+                    browser.navigationSource = "palette"
+                    viewModel.focusPane(browser)
+                }
+            }
+        )
+    }
 }
 
 // MARK: - Filtered Result
@@ -220,6 +242,22 @@ struct CommandPaletteView: View {
             items.append(.fromAction(action))
         }
 
+        // Clear Browsing History (always visible)
+        items.append(.builtIn(name: "Clear Browsing History\u{2026}") { vm in
+            guard let window = NSApp.keyWindow else { return }
+            let alert = NSAlert()
+            alert.messageText = "Clear Browsing History?"
+            alert.informativeText = "This will permanently delete all browsing history. This action cannot be undone."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Clear History")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn {
+                    HistoryStore.shared.clearAll()
+                }
+            }
+        })
+
         return items
     }
 
@@ -263,6 +301,37 @@ struct CommandPaletteView: View {
             }
         }
 
+        // Fuzzy-match history entries (only when query is non-empty)
+        let historyEntries = HistoryStore.shared.search(query: filterText, limit: 20)
+        for entry in historyEntries {
+            let displayURL = entry.urlWithoutScheme
+            let urlMatch = fuzzyMatch(query: filterText, candidate: displayURL)
+            let titleMatch: FuzzyMatchResult?
+            if let title = entry.title {
+                titleMatch = fuzzyMatch(query: filterText, candidate: title)
+            } else {
+                titleMatch = nil
+            }
+
+            if urlMatch != nil || titleMatch != nil {
+                let item = CommandPaletteItem.fromHistory(entry)
+                // URL matches rank higher than title-only matches
+                var score = urlMatch?.score ?? ((titleMatch?.score ?? 0) - 100)
+                // Add tiebreaker bonuses for recency and visit count
+                score += HistoryStore.tiebreakerBonus(
+                    lastVisitedAt: entry.lastVisitedAt,
+                    visitCount: entry.visitCount
+                )
+                results.append(FilteredPaletteItem(
+                    id: item.id,
+                    item: item,
+                    nameMatch: urlMatch,
+                    descriptionMatch: titleMatch,
+                    score: score
+                ))
+            }
+        }
+
         // Sort by score descending
         results.sort { $0.score > $1.score }
 
@@ -278,9 +347,11 @@ struct CommandPaletteView: View {
             ) { vm in
                 guard let url = normalizeURL(queryText) else { return }
                 if let browser = vm.contextualPane as? BrowserPaneModel {
+                    browser.navigationSource = "address"
                     browser.navigate(to: url)
                 } else {
                     let browser = vm.addBrowser(url: url)
+                    browser.navigationSource = "address"
                     vm.focusPane(browser)
                 }
             }

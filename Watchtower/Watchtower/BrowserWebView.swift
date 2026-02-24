@@ -57,6 +57,7 @@ class WatchtowerWebView: WKWebView {
         let result = super.becomeFirstResponder()
         if result {
             browser?.isFocused = true
+            scrollToVisibleInEnclosingScrollView()
         }
         return result
     }
@@ -310,12 +311,28 @@ struct BrowserWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             DispatchQueue.main.async { [weak self] in
-                self?.browser.isLoading = false
+                guard let self = self else { return }
+                self.browser.isLoading = false
                 if let title = webView.title, !title.isEmpty {
-                    self?.browser.pageTitle = title
+                    self.browser.pageTitle = title
                 }
                 if let url = webView.url {
-                    self?.browser.url = url
+                    self.browser.url = url
+
+                    // Record the visit to history.
+                    // Skip about:blank and deduplicate consecutive visits to the same URL.
+                    let urlString = url.absoluteString
+                    if urlString != "about:blank" && urlString != self.browser.lastRecordedURL {
+                        self.browser.lastRecordedURL = urlString
+                        let source = self.browser.navigationSource
+                        self.browser.navigationSource = "navigation"  // reset after consuming
+                        let pageTitle = webView.title
+                        HistoryStore.shared.recordVisit(
+                            url: url,
+                            title: (pageTitle?.isEmpty ?? true) ? nil : pageTitle,
+                            source: source
+                        )
+                    }
                 }
             }
         }

@@ -11,6 +11,15 @@ class BrowserPaneModel: PaneModel {
     @Published var httpStatusCode: Int? = nil
     @Published var hasInteractedForms: Bool = false
 
+    /// How the current navigation was initiated. Set before navigating,
+    /// consumed and reset to "navigation" after the visit is recorded.
+    /// Values: "navigation" (default), "palette", "address".
+    var navigationSource: String = "navigation"
+
+    /// The last URL that was recorded to history for this pane.
+    /// Used to deduplicate consecutive visits to the same URL.
+    var lastRecordedURL: String?
+
     /// Incremented each time user code requests navigation (via `navigate(to:)`).
     /// The web view coordinator tracks the last generation it loaded so that
     /// KVO writeback (which updates `url` but NOT `navigationGeneration`) does

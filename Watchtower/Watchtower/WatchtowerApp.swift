@@ -128,6 +128,9 @@ func findWebView(for paneId: UUID, in view: NSView) -> WatchtowerWebView? {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Initialize the history store early so pruning runs at startup.
+        _ = HistoryStore.shared
+
         // Set dark appearance at the app level so all windows (including
         // the titlebar chrome, traffic lights, and title text) render
         // correctly against the dark terminal background.

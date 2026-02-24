@@ -25,6 +25,8 @@
 		AA000001000000000000001A /* PaneModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001A /* PaneModel.swift */; };
 		AA000001000000000000001B /* BrowserPaneModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* BrowserPaneModel.swift */; };
 		AA000001000000000000001C /* BrowserWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001C /* BrowserWebView.swift */; };
+		AA000001000000000000001D /* NSView+ScrollToVisible.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001D /* NSView+ScrollToVisible.swift */; };
+		AA000001000000000000001E /* HistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001E /* HistoryStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -49,6 +51,8 @@
 		AA000002000000000000001A /* PaneModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneModel.swift; sourceTree = "<group>"; };
 		AA000002000000000000001B /* BrowserPaneModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserPaneModel.swift; sourceTree = "<group>"; };
 		AA000002000000000000001C /* BrowserWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserWebView.swift; sourceTree = "<group>"; };
+		AA000002000000000000001D /* NSView+ScrollToVisible.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSView+ScrollToVisible.swift"; sourceTree = "<group>"; };
+		AA000002000000000000001E /* HistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryStore.swift; sourceTree = "<group>"; };
 		AA0000030000000000000001 /* Watchtower.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Watchtower.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -95,6 +99,8 @@
 				AA000002000000000000001A /* PaneModel.swift */,
 				AA000002000000000000001B /* BrowserPaneModel.swift */,
 				AA000002000000000000001C /* BrowserWebView.swift */,
+				AA000002000000000000001D /* NSView+ScrollToVisible.swift */,
+				AA000002000000000000001E /* HistoryStore.swift */,
 			);
 			path = Watchtower/Watchtower;
 			sourceTree = "<group>";
@@ -193,6 +199,8 @@
 				AA000001000000000000001A /* PaneModel.swift in Sources */,
 				AA000001000000000000001B /* BrowserPaneModel.swift in Sources */,
 				AA000001000000000000001C /* BrowserWebView.swift in Sources */,
+				AA000001000000000000001D /* NSView+ScrollToVisible.swift in Sources */,
+				AA000001000000000000001E /* HistoryStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
