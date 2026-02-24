@@ -37,6 +37,12 @@ struct WatchtowerApp: App {
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
 
+                // Alternative shortcut: Cmd+L (matches browser "focus URL bar")
+                Button("Focus Command Palette") {
+                    activeViewModel?.toggleCommandPalette()
+                }
+                .keyboardShortcut("l", modifiers: [.command])
+
                 Divider()
 
                 Button("Focus Previous Pane") {

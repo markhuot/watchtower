@@ -1,5 +1,8 @@
 import SwiftUI
 import WebKit
+import os
+
+private let logger = Logger(subsystem: "com.watchtower", category: "BrowserWebView")
 
 // MARK: - Shared Configuration
 
@@ -105,6 +108,14 @@ class WatchtowerWebView: WKWebView {
             return false
         }
 
+        // Let Cmd+L pass through to the menu system for the command palette
+        // instead of being consumed by WebKit's "focus address bar" handler.
+        if flags == [.command],
+           let chars = event.charactersIgnoringModifiers,
+           chars == "l" {
+            return false
+        }
+
         return super.performKeyEquivalent(with: event)
     }
 
@@ -189,6 +200,7 @@ struct BrowserWebView: NSViewRepresentable {
             // navigation the web content process never composits a
             // frame and the view stays black.
             context.coordinator.loadedGeneration = self.browser.navigationGeneration
+            logger.info("[makeNSView] Loading initial URL: \(self.browser.url.absoluteString, privacy: .public) (generation=\(self.browser.navigationGeneration))")
             webView.load(URLRequest(url: self.browser.url))
         }
 
@@ -202,6 +214,7 @@ struct BrowserWebView: NSViewRepresentable {
         // triggering redundant loads.
         guard browser.navigationGeneration > context.coordinator.loadedGeneration else { return }
         context.coordinator.loadedGeneration = browser.navigationGeneration
+        logger.info("[updateNSView] Navigating to: \(self.browser.url.absoluteString, privacy: .public) (generation=\(self.browser.navigationGeneration))")
         webView.load(URLRequest(url: browser.url))
     }
 
@@ -287,6 +300,9 @@ struct BrowserWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView,
                       decidePolicyFor navigationAction: WKNavigationAction,
                       decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            let url = navigationAction.request.url?.absoluteString ?? "<nil>"
+            let isTargetNil = navigationAction.targetFrame == nil
+            logger.info("[decidePolicyFor action] url=\(url, privacy: .public) targetFrame=\(isTargetNil ? "nil" : "present", privacy: .public) navigationType=\(navigationAction.navigationType.rawValue)")
             // Allow all navigations. Target=_blank opens in same web view.
             if navigationAction.targetFrame == nil {
                 // New window request — load in the same view
@@ -302,16 +318,21 @@ struct BrowserWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView,
                       decidePolicyFor navigationResponse: WKNavigationResponse,
                       decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+            let url = navigationResponse.response.url?.absoluteString ?? "<nil>"
             // Capture HTTP status code
             if let httpResponse = navigationResponse.response as? HTTPURLResponse {
+                logger.info("[decidePolicyFor response] url=\(url, privacy: .public) status=\(httpResponse.statusCode)")
                 DispatchQueue.main.async { [weak self] in
                     self?.browser.httpStatusCode = httpResponse.statusCode
                 }
+            } else {
+                logger.info("[decidePolicyFor response] url=\(url, privacy: .public) (not HTTP response)")
             }
             decisionHandler(.allow)
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            logger.info("[didStartProvisionalNavigation] url=\(webView.url?.absoluteString ?? "<nil>", privacy: .public)")
             DispatchQueue.main.async { [weak self] in
                 self?.browser.isLoading = true
                 self?.browser.hasInteractedForms = false
@@ -319,7 +340,16 @@ struct BrowserWebView: NSViewRepresentable {
             }
         }
 
+        func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
+            logger.info("[didReceiveServerRedirect] redirected to url=\(webView.url?.absoluteString ?? "<nil>", privacy: .public)")
+        }
+
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            logger.info("[didCommit] url=\(webView.url?.absoluteString ?? "<nil>", privacy: .public)")
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            logger.info("[didFinish] url=\(webView.url?.absoluteString ?? "<nil>", privacy: .public) title=\(webView.title ?? "<nil>", privacy: .public)")
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.browser.isLoading = false
@@ -348,6 +378,7 @@ struct BrowserWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            logger.error("[didFail] url=\(webView.url?.absoluteString ?? "<nil>", privacy: .public) error=\(error.localizedDescription, privacy: .public) (code=\((error as NSError).code), domain=\((error as NSError).domain, privacy: .public))")
             DispatchQueue.main.async { [weak self] in
                 self?.browser.isLoading = false
                 // Mark as failed by setting a non-2xx status code
@@ -358,6 +389,10 @@ struct BrowserWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            logger.error("[didFailProvisionalNavigation] url=\(webView.url?.absoluteString ?? "<nil>", privacy: .public) error=\(error.localizedDescription, privacy: .public) (code=\((error as NSError).code), domain=\((error as NSError).domain, privacy: .public))")
+            if let underlyingError = (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError {
+                logger.error("[didFailProvisionalNavigation] underlying: \(underlyingError.localizedDescription, privacy: .public) (code=\(underlyingError.code), domain=\(underlyingError.domain, privacy: .public))")
+            }
             DispatchQueue.main.async { [weak self] in
                 self?.browser.isLoading = false
                 // Mark as failed
