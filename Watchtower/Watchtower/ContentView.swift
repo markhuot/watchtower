@@ -476,6 +476,11 @@ class PaneContainerViewModel: ObservableObject {
     /// responder from the terminal's NSView (which clears isFocused).
     @Published var commandPalettePaneId: UUID? = nil
 
+    /// When non-nil, the command palette's text field is pre-filled with
+    /// this string on next open (e.g. the current browser URL for Cmd+L).
+    /// Cleared by `dismissCommandPalette`.
+    @Published var commandPaletteInitialText: String? = nil
+
     /// When set, the next NSView matching this pane ID to enter the window
     /// hierarchy will claim first responder. Setting a new value automatically
     /// cancels the previous one via `didSet`, preventing races.
@@ -662,6 +667,22 @@ class PaneContainerViewModel: ObservableObject {
         }
     }
 
+    /// Open the command palette pre-filled with the focused browser's URL.
+    /// If the focused pane is not a browser the palette opens normally.
+    /// If the palette is already open, it is dismissed instead (toggle).
+    func focusCommandPalette() {
+        if isCommandPalettePresented {
+            dismissCommandPalette()
+            return
+        }
+        if let browser = panes.first(where: { $0.isFocused }) as? BrowserPaneModel {
+            commandPaletteInitialText = browser.url.absoluteString
+        }
+        if let focused = panes.first(where: { $0.isFocused }) {
+            commandPalettePaneId = focused.id
+        }
+    }
+
     /// Dismiss the command palette. If no `focusPane` call was made since
     /// `beforeGeneration` was captured, focus is restored to the pane that
     /// had the palette. If an action called `focusPane()` (bumping the
@@ -672,6 +693,7 @@ class PaneContainerViewModel: ObservableObject {
     func dismissCommandPalette(beforeGeneration: UInt? = nil) {
         guard let paneId = commandPalettePaneId else { return }
         commandPalettePaneId = nil  // tear down the palette UI
+        commandPaletteInitialText = nil  // clear any pre-filled text
         // Restore focus unless an action explicitly called focusPane()
         if beforeGeneration == nil || focusGeneration == beforeGeneration {
             focusPaneById(paneId)

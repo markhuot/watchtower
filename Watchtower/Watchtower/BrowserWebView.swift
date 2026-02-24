@@ -15,6 +15,12 @@ enum BrowserConfiguration {
     static let processPool = WKProcessPool()
 
     /// User script injected into every browser pane for form interaction detection.
+    ///
+    /// Tracks whether the user has interacted with form elements (input, textarea,
+    /// select) and notifies Swift via a message handler. The local `changed`
+    /// gate variable is reset on `beforeunload` so it re-arms for each new
+    /// document. The Swift-side `hasInteractedForms` flag is reset separately
+    /// in `didStartProvisionalNavigation` and `didCommit`.
     static let formScript = WKUserScript(
         source: """
         (function() {
@@ -60,7 +66,30 @@ class WatchtowerWebView: WKWebView {
         let result = super.becomeFirstResponder()
         if result {
             browser?.isFocused = true
+
+            // Notify the view model so focusModePaneId is updated (which
+            // drives the focus-mode width expansion). Without this, direct
+            // clicks on the WKWebView bypass focusPane() entirely and the
+            // pane never expands.
+            if let browser = browser, let vm = browser.viewModel {
+                // Only call focusPane when the view model doesn't already
+                // consider this pane focused, to avoid re-entrant loops
+                // (focusPane → makeFirstResponder → becomeFirstResponder).
+                if vm.focusModePaneId != browser.id || vm.contextualPane?.id != browser.id {
+                    vm.focusPane(id: browser.id)
+                }
+            }
+
             scrollToVisibleInEnclosingScrollView()
+
+            // In focus mode the pane width changes after focusModePaneId is
+            // updated, but SwiftUI lays out asynchronously. The immediate
+            // scroll above uses the pre-expansion frame. Schedule a
+            // second scroll after the layout pass so the fully-expanded
+            // pane is brought into view.
+            DispatchQueue.main.async { [weak self] in
+                self?.scrollToVisibleInEnclosingScrollView()
+            }
         }
         return result
     }
@@ -117,6 +146,86 @@ class WatchtowerWebView: WKWebView {
         }
 
         return super.performKeyEquivalent(with: event)
+    }
+
+    // MARK: - Horizontal scroll forwarding
+
+    /// Override scrollWheel so that horizontal trackpad gestures scroll the
+    /// Watchtower pane strip (the parent horizontal ScrollView) instead of
+    /// being silently consumed by the web content.
+    ///
+    /// Strategy:
+    ///  - If the web page can scroll horizontally in the direction of the
+    ///    swipe, let WKWebView handle it (the user is scrolling a wide page).
+    ///  - Otherwise, forward the event up the responder chain so the parent
+    ///    horizontal ScrollView moves between panes.
+    ///  - Vertical scrolling always goes to WKWebView (normal web page
+    ///    scrolling).
+    override func scrollWheel(with event: NSEvent) {
+        let dx = event.scrollingDeltaX
+
+        // Pure vertical scroll or zero horizontal delta — let WKWebView
+        // handle it entirely.
+        if dx == 0 {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        // Check whether the web content has horizontal overflow by walking
+        // the view hierarchy for the internal NSScrollView that WKWebView
+        // uses. This is synchronous and avoids async JS evaluation.
+        if let innerScrollView = findEnclosedScrollView() {
+            let documentView = innerScrollView.documentView ?? innerScrollView
+            let contentWidth = documentView.frame.width
+            let visibleWidth = innerScrollView.contentView.bounds.width
+            let scrollX = innerScrollView.contentView.bounds.origin.x
+            let hasHorizontalOverflow = contentWidth > visibleWidth + 1 // 1px tolerance
+
+            if hasHorizontalOverflow {
+                // Page has horizontal overflow — check if we're at a
+                // boundary in the direction of the swipe.
+                let atLeftEdge = scrollX <= 0.5
+                let atRightEdge = scrollX >= (contentWidth - visibleWidth - 0.5)
+
+                // Positive deltaX = swiping right (content moves left, i.e.
+                // user wants to scroll towards the start). Negative deltaX =
+                // swiping left (content moves right, towards the end).
+                let swipingTowardStart = dx > 0
+                let swipingTowardEnd = dx < 0
+
+                let atBoundary = (swipingTowardStart && atLeftEdge) || (swipingTowardEnd && atRightEdge)
+
+                if !atBoundary {
+                    // Web page can still scroll in this direction — let
+                    // WKWebView consume the event.
+                    super.scrollWheel(with: event)
+                    return
+                }
+            }
+        }
+
+        // The web page either has no horizontal overflow or is at a scroll
+        // boundary in the swipe direction. Forward to the parent so the
+        // pane strip scrolls.
+        self.nextResponder?.scrollWheel(with: event)
+    }
+
+    /// Walk the subview tree to find the internal NSScrollView that
+    /// WKWebView uses for its web content.
+    private func findEnclosedScrollView() -> NSScrollView? {
+        return findScrollViewInSubviews(of: self)
+    }
+
+    private func findScrollViewInSubviews(of view: NSView) -> NSScrollView? {
+        for subview in view.subviews {
+            if let scrollView = subview as? NSScrollView {
+                return scrollView
+            }
+            if let found = findScrollViewInSubviews(of: subview) {
+                return found
+            }
+        }
+        return nil
     }
 
     /// Intercept the "Close" menu item (Cmd+W). When multiple panes exist,
@@ -372,6 +481,15 @@ struct BrowserWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
             logger.info("[didCommit] url=\(webView.url?.absoluteString ?? "<nil>", privacy: .public)")
+            // Reset the form interaction flag here as well as in
+            // didStartProvisionalNavigation. By the time didCommit fires the
+            // old document is fully replaced, so any stale formInteraction
+            // messages queued by the previous page's scripts have already been
+            // delivered. This eliminates a race where a late-arriving message
+            // re-sets the flag after the provisional-navigation reset.
+            DispatchQueue.main.async { [weak self] in
+                self?.browser.hasInteractedForms = false
+            }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

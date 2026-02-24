@@ -40,7 +40,7 @@ struct CommandPaletteItem: Identifiable {
     /// Create a query action item (Go to URL, Search the web).
     static func queryAction(
         name: String,
-        queryPreview: String,
+        queryPreview: String? = nil,
         action: @escaping (PaneContainerViewModel, Bool) -> Void
     ) -> CommandPaletteItem {
         CommandPaletteItem(
@@ -77,7 +77,7 @@ struct CommandPaletteItem: Identifiable {
             displayName: entry.urlWithoutScheme,
             description: entry.title,
             shortcutText: nil,
-            sourceTag: "[history]",
+            sourceTag: "History",
             isQueryAction: false,
             queryPreview: nil,
             action: { viewModel, forceNewPane in
@@ -171,11 +171,11 @@ struct CommandPaletteView: View {
         var items: [CommandPaletteItem] = []
 
         // Built-in commands (always visible)
-        items.append(.builtIn(name: "New Terminal", shortcut: "\u{2318}T") { vm in
+        items.append(.builtIn(name: "New Terminal", shortcut: "\u{2318}\u{21E7}T") { vm in
             let terminal = vm.addTerminal()
             vm.focusPane(terminal)
         })
-        items.append(.builtIn(name: "New Browser") { vm in
+        items.append(.builtIn(name: "New Browser", shortcut: "\u{2318}\u{21E7}B") { vm in
             let browser = vm.addBrowser()
             vm.focusPane(browser)
         })
@@ -200,7 +200,7 @@ struct CommandPaletteView: View {
         items.append(.builtIn(name: "Focus Next Pane", shortcut: "\u{2318}\u{21E7}]") { vm in
             vm.focusNextPane()
         })
-        items.append(.builtIn(name: "Toggle Focus Mode", shortcut: "\u{2318}\u{21E7}\u{21A9}") { vm in
+        items.append(.builtIn(name: "Focus Current Pane", shortcut: "\u{2318}\u{21E7}\u{21A9}") { vm in
             vm.toggleFocusMode()
         })
         items.append(.builtIn(name: "Move Pane Left", shortcut: "\u{2318}\u{2325}[") { vm in
@@ -356,8 +356,7 @@ struct CommandPaletteView: View {
             let urlLike = isURLLike(queryText)
 
             let goToURL = CommandPaletteItem.queryAction(
-                name: "Go to URL",
-                queryPreview: queryText
+                name: "Go to URL"
             ) { vm, forceNewPane in
                 guard let url = normalizeURL(queryText) else { return }
                 if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
@@ -371,8 +370,7 @@ struct CommandPaletteView: View {
             }
 
             let searchWeb = CommandPaletteItem.queryAction(
-                name: "Search the web",
-                queryPreview: queryText
+                name: "Search the web"
             ) { vm, forceNewPane in
                 let encoded = queryText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? queryText
                 guard let url = URL(string: "https://duckduckgo.com/?q=\(encoded)") else { return }
@@ -427,6 +425,7 @@ struct CommandPaletteView: View {
             // Search field
             CommandPaletteTextField(
                 text: $filterText,
+                selectAllOnAppear: viewModel.commandPaletteInitialText != nil,
                 onArrowUp: { moveSelection(by: -1) },
                 onArrowDown: { moveSelection(by: 1) },
                 onJumpUp: { jumpSectionUp() },
@@ -498,6 +497,12 @@ struct CommandPaletteView: View {
                 .shadow(color: appManager.highlightColor.opacity(0.6), radius: 8)
         )
         .shadow(color: .black.opacity(0.5), radius: 40, x: 0, y: 15)
+        .onAppear {
+            // Pre-fill the filter text when opened with Cmd+L on a browser pane
+            if let initial = viewModel.commandPaletteInitialText {
+                filterText = initial
+            }
+        }
         .onChange(of: filterText) { _ in
             // Reset selection when filter changes
             selectedIndex = 0
@@ -728,6 +733,7 @@ struct CommandPaletteRow: View {
 /// search field, with direct first responder control and key event interception.
 struct CommandPaletteTextField: NSViewRepresentable {
     @Binding var text: String
+    var selectAllOnAppear: Bool = false
     var onArrowUp: () -> Void
     var onArrowDown: () -> Void
     var onJumpUp: () -> Void
@@ -751,6 +757,11 @@ struct CommandPaletteTextField: NSViewRepresentable {
         field.focusRingType = .none
         field.cell?.sendsActionOnEndEditing = false
 
+        // Pre-fill text if provided (e.g. browser URL from Cmd+L)
+        if !text.isEmpty {
+            field.stringValue = text
+        }
+
         // Become first responder once when the palette appears.
         // This must be in makeNSView (not updateNSView) so it only
         // fires once — updateNSView runs during SwiftUI teardown and
@@ -758,6 +769,11 @@ struct CommandPaletteTextField: NSViewRepresentable {
         DispatchQueue.main.async {
             if let window = field.window {
                 window.makeFirstResponder(field)
+                // Select all text so the user can type to replace or
+                // press arrow keys to edit (matches browser Cmd+L UX).
+                if self.selectAllOnAppear {
+                    field.selectText(nil)
+                }
             }
         }
 

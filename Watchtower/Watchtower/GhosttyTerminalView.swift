@@ -283,7 +283,25 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
             if let surface = surface {
                 ghostty_surface_set_focus(surface, true)
             }
+
+            // Notify the view model so focusModePaneId is updated (which
+            // drives the focus-mode width expansion). Without this, direct
+            // clicks on the terminal bypass focusPane() entirely.
+            if let vm = terminal.viewModel {
+                if vm.focusModePaneId != terminal.id || vm.contextualPane?.id != terminal.id {
+                    vm.focusPane(id: terminal.id)
+                }
+            }
+
             scrollToVisibleInEnclosingScrollView()
+
+            // In focus mode the pane width changes after focusModePaneId is
+            // updated, but SwiftUI lays out asynchronously. Schedule a
+            // second scroll after the layout pass so the fully-expanded
+            // pane is brought into view.
+            DispatchQueue.main.async { [weak self] in
+                self?.scrollToVisibleInEnclosingScrollView()
+            }
         }
         return result
     }
@@ -466,24 +484,43 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         // Sync preedit state
         syncPreedit(clearIfNeeded: markedTextBefore)
 
+        var consumed = false
         if let list = keyTextAccumulator, list.count > 0 {
             // We composed text
             for text in list {
-                _ = keyAction(
+                if keyAction(
                     action,
                     event: event,
                     translationEvent: translationEvent,
                     text: text
-                )
+                ) {
+                    consumed = true
+                }
             }
         } else {
             // Normal key event
-            _ = keyAction(
+            consumed = keyAction(
                 action,
                 event: event,
                 translationEvent: translationEvent,
                 text: translationEvent.ghosttyCharacters,
                 composing: markedText.length > 0 || markedTextBefore
+            )
+        }
+
+        // After Ghostty processes Cmd+K (clear_screen), the scrollback buffer
+        // is cleared but the viewport may still be scrolled up into what were
+        // active screen rows. Ghostty's own SurfaceScrollView handles this via
+        // scrollbar state notifications, but Watchtower doesn't use that component.
+        // Snap the viewport to the bottom so there's nothing left to scroll to.
+        if consumed,
+           event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers == "k" {
+            let action = "scroll_to_bottom"
+            ghostty_surface_binding_action(
+                surface,
+                action,
+                UInt(action.utf8.count)
             )
         }
     }

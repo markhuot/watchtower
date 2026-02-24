@@ -54,7 +54,7 @@ struct WatchtowerApp: App {
 
                 // Alternative shortcut: Cmd+L (matches browser "focus URL bar")
                 Button("Focus Command Palette") {
-                    activeViewModel?.toggleCommandPalette()
+                    activeViewModel?.focusCommandPalette()
                 }
                 .keyboardShortcut("l", modifiers: [.command])
 
