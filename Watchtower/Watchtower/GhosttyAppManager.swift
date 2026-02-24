@@ -279,6 +279,15 @@ class GhosttyAppManager: ObservableObject {
         let title = String(cString: titlePtr)
         DispatchQueue.main.async {
             view.updateTitle(title)
+            // Title changes often coincide with a command starting (the
+            // shell updates the title to the running command).  Re-check
+            // the surface state so the status icon flips to .active when
+            // a long-running command begins.  We only promote to .active
+            // — never demote from .failed, which commandFinished owns.
+            let currentStatus = view.terminal.terminalStatus
+            if currentStatus != .failed {
+                view.refreshStatusFromSurface()
+            }
         }
         return true
     }
@@ -307,8 +316,13 @@ class GhosttyAppManager: ObservableObject {
         guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
         guard let surface = target.target.surface else { return false }
         guard let view = surfaceView(from: surface) else { return false }
+        let exitCode = v.exit_code  // -1 = not reported, 0 = success, 1-255 = failure
         DispatchQueue.main.async {
-            view.refreshStatusFromSurface()
+            if exitCode > 0 {
+                view.updateStatus(.failed)
+            } else {
+                view.refreshStatusFromSurface()
+            }
         }
         return true
     }
@@ -325,7 +339,13 @@ class GhosttyAppManager: ObservableObject {
         let pwd = String(cString: pwdPtr)
         DispatchQueue.main.async {
             view.terminal.terminalDirectory = pwd
-            view.refreshStatusFromSurface()
+            // Don't overwrite .failed status — setPwd fires after
+            // commandFinished and would reset a failed command's red
+            // indicator back to green/idle.
+            let currentStatus = view.terminal.terminalStatus
+            if currentStatus != .failed {
+                view.refreshStatusFromSurface()
+            }
         }
         return true
     }
