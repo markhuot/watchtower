@@ -25,7 +25,7 @@ struct WatchtowerApp: App {
                 Button("Command Palette") {
                     activeViewModel?.toggleCommandPalette()
                 }
-                .keyboardShortcut("k", modifiers: [.command])
+                .keyboardShortcut("p", modifiers: [.command, .shift])
 
                 Divider()
 
@@ -81,9 +81,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWindow.didBecomeKeyNotification,
             object: nil
         )
+
+        // Re-apply window configuration when entering full screen, because
+        // macOS resets the window backgroundColor during the transition.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidChangeFullScreen(_:)),
+            name: NSWindow.willEnterFullScreenNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidChangeFullScreen(_:)),
+            name: NSWindow.didEnterFullScreenNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidChangeFullScreen(_:)),
+            name: NSWindow.didExitFullScreenNotification,
+            object: nil
+        )
     }
 
     @objc func windowDidBecomeAvailable(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            configureWindow(window)
+        }
+    }
+
+    @objc func windowDidChangeFullScreen(_ notification: Notification) {
         if let window = notification.object as? NSWindow {
             configureWindow(window)
         }

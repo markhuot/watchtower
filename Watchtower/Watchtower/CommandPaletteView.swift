@@ -240,6 +240,7 @@ struct CommandPaletteView: View {
                 .strokeBorder(appManager.highlightColor, lineWidth: 2)
                 .shadow(color: appManager.highlightColor.opacity(0.6), radius: 8)
         )
+        .shadow(color: .black.opacity(0.5), radius: 40, x: 0, y: 15)
         .onChange(of: filterText) { _ in
             // Reset selection when filter changes
             selectedIndex = 0
@@ -255,10 +256,13 @@ struct CommandPaletteView: View {
     private func executeSelected() {
         guard selectedIndex >= 0 && selectedIndex < visibleItems.count else { return }
         let item = visibleItems[selectedIndex].item
+        // Run the action BEFORE dismissing so that `contextualTerminal` can
+        // still resolve via `commandPaletteTerminalId`. The action may create
+        // a new terminal that manages focus itself.
+        item.action(viewModel)
         // If the action manages focus itself (e.g. New Terminal), skip
         // restoring focus to the original pane on dismiss.
         viewModel.dismissCommandPalette(restoreFocus: !item.managesFocus)
-        item.action(viewModel)
     }
 }
 
@@ -373,18 +377,23 @@ struct CommandPaletteTextField: NSViewRepresentable {
         field.isBordered = false
         field.focusRingType = .none
         field.cell?.sendsActionOnEndEditing = false
+
+        // Become first responder once when the palette appears.
+        // This must be in makeNSView (not updateNSView) so it only
+        // fires once — updateNSView runs during SwiftUI teardown and
+        // would re-steal focus from the terminal after dismissal.
+        DispatchQueue.main.async {
+            if let window = field.window {
+                window.makeFirstResponder(field)
+            }
+        }
+
         return field
     }
 
     func updateNSView(_ nsView: NSTextField, context: Context) {
         if nsView.stringValue != text {
             nsView.stringValue = text
-        }
-        // Become first responder when the view appears/updates
-        DispatchQueue.main.async {
-            if let window = nsView.window, window.firstResponder != nsView.currentEditor() {
-                window.makeFirstResponder(nsView)
-            }
         }
     }
 

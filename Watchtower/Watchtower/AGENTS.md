@@ -29,3 +29,14 @@ Non-obvious learnings specific to the Swift source files in this directory.
 
 - **Action discovery pipeline**: Wired into the same Combine `switchToLatest` pipeline as git detection in `TerminalContainerViewModel`. Both re-run when the focused terminal's directory changes.
 - **Action deduplication**: Project actions (`.watchtower/actions/`) take precedence over global actions (`~/.config/watchtower/actions/`) when filenames match. The `id` field is the filename.
+
+## NSViewRepresentable First Responder Pitfalls
+
+- **`updateNSView` fires during SwiftUI view teardown**: When a view is removed from the hierarchy, SwiftUI still calls `updateNSView`. Any `makeFirstResponder` call in `updateNSView` will re-steal focus from whatever view was just focused. Place one-time first-responder grabs in `makeNSView` only.
+- **Double-async for focus after state changes**: A single `DispatchQueue.main.async` is insufficient when SwiftUI must both tear down one view (e.g. command palette's NSTextField) and create/focus another (e.g. new terminal). Use nested `DispatchQueue.main.async { DispatchQueue.main.async { ... } }` so the first pass lets SwiftUI process the state change and the second ensures the old view has fully resigned.
+- **Debugging first-responder timing**: `NSApp.keyWindow?.firstResponder` changes between async dispatches, making breakpoints and print statements unreliable. Write timestamped logs to a file (e.g. `/tmp/watchtower_debug.log`) to trace the exact sequence.
+
+## Command Palette
+
+- **Files that must change together**: `CommandPaletteView.swift` defines the `managesFocus` flag on each `CommandPaletteItem`, which controls the `restoreFocus` parameter passed to `dismissCommandPalette()` in `ContentView.swift`. Adding a new palette command that manages its own focus requires coordinating both files.
+- **Focus lifecycle**: Palette open → `makeNSView` grabs focus once → user selects action → `dismissCommandPalette(restoreFocus: !managesFocus)` → action runs (e.g. `addTerminal`) → double-async `makeFocused` claims focus for the target terminal. The NSTextField must NOT re-grab focus during this sequence.

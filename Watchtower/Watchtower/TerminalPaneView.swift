@@ -6,6 +6,12 @@ struct TerminalPaneView: View {
     @ObservedObject var viewModel: TerminalContainerViewModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
 
+    /// Per-window active state. `.key` means this window is the key window,
+    /// `.active` means it's active but not key, `.inactive` means background.
+    /// Using this instead of `appManager.isWindowActive` so that only the
+    /// frontmost window shows the full-intensity focus highlight.
+    @Environment(\.controlActiveState) private var controlActiveState
+
     /// Called when a drag starts from this pane's title bar.
     var onDragStarted: (() -> Void)? = nil
 
@@ -14,22 +20,27 @@ struct TerminalPaneView: View {
     
     private let cornerRadius: CGFloat = 6
 
+    /// Whether this window is the key (frontmost) window.
+    private var isWindowKey: Bool {
+        controlActiveState == .key
+    }
+
     /// Whether the command palette is open on this pane.
     private var isPaletteOpenHere: Bool {
         viewModel.commandPaletteTerminalId == terminal.id
     }
 
     /// Whether the highlight should be shown at full intensity.
-    /// True only when the pane is focused AND the window is active
+    /// True only when the pane is focused AND the window is the key window
     /// AND the command palette is NOT open (palette draws its own outline).
     private var isHighlightActive: Bool {
-        terminal.isFocused && appManager.isWindowActive && !isPaletteOpenHere
+        terminal.isFocused && isWindowKey && !isPaletteOpenHere
     }
 
     /// A dimmed version of the highlight for when the pane is focused
-    /// but the window is inactive.
+    /// but the window is not the key window.
     private var isHighlightDimmed: Bool {
-        terminal.isFocused && !appManager.isWindowActive && !isPaletteOpenHere
+        terminal.isFocused && !isWindowKey && !isPaletteOpenHere
     }
 
     /// The border color for the focus highlight, accounting for window activation state.
@@ -106,7 +117,7 @@ struct TerminalPaneView: View {
         }
         .opacity(terminal.isDragging ? 0.5 : 1.0)
         .animation(.easeInOut(duration: 0.15), value: terminal.isFocused)
-        .animation(.easeInOut(duration: 0.15), value: appManager.isWindowActive)
+        .animation(.easeInOut(duration: 0.15), value: controlActiveState)
         .animation(.easeInOut(duration: 0.15), value: terminal.isDragging)
         .animation(.easeOut(duration: 0.15), value: viewModel.commandPaletteTerminalId)
     }

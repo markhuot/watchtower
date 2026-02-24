@@ -197,6 +197,24 @@ The existing `performClose` on the NSView remains unchanged — Cmd+W still work
 
 ### 8. Focus Management and First Responder
 
+**Contextual terminal resolution:** When the palette is open, its NSTextField is the first responder — no terminal has `isFocused == true`. Any code that resolves the "current" terminal via `terminals.first(where: { $0.isFocused })` will return `nil` and fall back to defaults (e.g., `NSHomeDirectory()` for the working directory). This caused actions invoked from the palette to start in the wrong directory ("file does not exist") while the same action worked from the toolbar button.
+
+The fix is `contextualTerminal` on `TerminalContainerViewModel`, which checks `commandPaletteTerminalId` first (since the palette tracks which terminal it was opened on), then falls back to `isFocused`:
+
+```swift
+var contextualTerminal: TerminalModel? {
+    if let paletteId = commandPaletteTerminalId,
+       let t = terminals.first(where: { $0.id == paletteId }) {
+        return t
+    }
+    return terminals.first(where: { $0.isFocused })
+}
+```
+
+All methods that need the "current" terminal — `focusedDirectory`, `addTerminal()`, `executeAction()`, `closeCurrentPane()`, `toggleFocusMode()` — must use `contextualTerminal` instead of the direct `isFocused` lookup.
+
+Additionally, `executeSelected()` in `CommandPaletteView` must run the action **before** calling `dismissCommandPalette()`, so that `commandPaletteTerminalId` is still set when `contextualTerminal` is evaluated during action execution.
+
 **Stealing focus on open:** When the palette appears, its text field must become the first responder so the user can type immediately. SwiftUI's `@FocusState` doesn't reliably make an overlay's text field first responder on macOS. The solution is an `NSViewRepresentable` focus injector — a tiny invisible NSView that calls `window.makeFirstResponder(textField)` when it appears.
 
 Concretely, `CommandPaletteView` wraps its `NSTextField` (via `NSViewRepresentable`) rather than using a SwiftUI `TextField`. This gives direct control over first responder status:

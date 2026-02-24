@@ -43,7 +43,7 @@ struct ContentView: View {
             }
         }
         .background(appManager.backgroundColor.ignoresSafeArea())
-        .focusedValue(\.terminalViewModel, viewModel)
+        .focusedSceneValue(\.terminalViewModel, viewModel)
         .onReceive(NotificationCenter.default.publisher(for: .ghosttySurfaceClosed)) { notification in
             if let view = notification.object as? GhosttyTerminalNSView {
                 viewModel.removeTerminal(byId: view.terminal.id)
@@ -469,9 +469,21 @@ class TerminalContainerViewModel: ObservableObject {
         actions.filter { $0.isGlobal }
     }
 
-    /// The focused terminal's current working directory.
+    /// The terminal that should provide context for actions and other operations.
+    /// Checks the command palette's terminal first (since its NSTextField steals
+    /// first responder, no terminal has `isFocused == true` while the palette is
+    /// open), then falls back to the actually focused terminal.
+    var contextualTerminal: TerminalModel? {
+        if let paletteId = commandPaletteTerminalId,
+           let t = terminals.first(where: { $0.id == paletteId }) {
+            return t
+        }
+        return terminals.first(where: { $0.isFocused })
+    }
+
+    /// The contextual terminal's current working directory.
     var focusedDirectory: String {
-        terminals.first(where: { $0.isFocused })?.directory ?? NSHomeDirectory()
+        contextualTerminal?.directory ?? NSHomeDirectory()
     }
 
     /// Event monitor for detecting when a drag session ends (mouse up).
@@ -569,7 +581,7 @@ class TerminalContainerViewModel: ObservableObject {
                 focusModeTerminalId = nil
             }
         } else {
-            guard let focused = terminals.first(where: { $0.isFocused }) else { return }
+            guard let focused = contextualTerminal else { return }
             focusModeTerminalId = focused.id
             withAnimation(.easeInOut(duration: 0.2)) {
                 isFocusMode = true
@@ -620,7 +632,7 @@ class TerminalContainerViewModel: ObservableObject {
     /// If multiple panes exist, closes just the focused one (with confirmation
     /// if an active session is running). If it's the only pane, closes the window.
     func closeCurrentPane() {
-        guard let focusedTerminal = terminals.first(where: { $0.isFocused }) else { return }
+        guard let focusedTerminal = contextualTerminal else { return }
         guard let window = NSApp.keyWindow,
               let contentView = window.contentView else { return }
 
@@ -662,11 +674,11 @@ class TerminalContainerViewModel: ObservableObject {
     }
 
     func addTerminal() {
-        // Inherit the working directory and pane width from the currently
-        // focused terminal, falling back to defaults when nothing is focused.
-        let focusedTerminal = terminals.first(where: { $0.isFocused })
-        let directory = focusedTerminal?.directory ?? NSHomeDirectory()
-        let paneWidth = focusedTerminal?.paneWidth ?? TerminalModel.defaultPaneWidth
+        // Inherit the working directory and pane width from the contextual
+        // terminal, falling back to defaults when nothing is focused.
+        let sourceTerminal = contextualTerminal
+        let directory = sourceTerminal?.directory ?? NSHomeDirectory()
+        let paneWidth = sourceTerminal?.paneWidth ?? TerminalModel.defaultPaneWidth
 
         let terminal = TerminalModel(
             id: UUID(),
@@ -676,19 +688,27 @@ class TerminalContainerViewModel: ObservableObject {
             paneWidth: paneWidth
         )
 
-        // Insert after the currently focused pane, or append at the end if none is focused
-        if let focusedIndex = terminals.firstIndex(where: { $0.isFocused }) {
-            terminals.insert(terminal, at: focusedIndex + 1)
+        // Insert after the contextual pane, or append at the end if none is focused
+        if let source = sourceTerminal,
+           let sourceIndex = terminals.firstIndex(where: { $0.id == source.id }) {
+            terminals.insert(terminal, at: sourceIndex + 1)
         } else {
             terminals.append(terminal)
         }
 
-        // Focus the new terminal after SwiftUI has time to create the view
+        // Focus the new terminal after SwiftUI has time to create the view.
+        // Uses a double-async so that if the command palette's NSTextField is
+        // being torn down (which resigns first responder asynchronously), the
+        // teardown completes before we claim first responder for the new pane.
         let newId = terminal.id
         DispatchQueue.main.async { [weak self] in
-            guard let self = self,
-                  let idx = self.terminals.firstIndex(where: { $0.id == newId }) else { return }
-            self.makeFocused(index: idx)
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self,
+                      let idx = self.terminals.firstIndex(where: { $0.id == newId }) else {
+                    return
+                }
+                self.makeFocused(index: idx)
+            }
         }
     }
 
@@ -740,28 +760,33 @@ class TerminalContainerViewModel: ObservableObject {
         terminals.remove(at: index)
 
         if let focusIndex = focusIndex {
-            // Focus the neighbor after a brief delay so SwiftUI has
-            // time to reconcile the view hierarchy.
+            // Focus the neighbor after SwiftUI reconciles the view hierarchy.
+            // Double-async so that if the command palette's NSTextField is being
+            // torn down, it finishes resigning first responder before we claim it.
             let targetId = terminals[focusIndex].id
             DispatchQueue.main.async { [weak self] in
-                guard let self = self,
-                      let idx = self.terminals.firstIndex(where: { $0.id == targetId }) else { return }
-                self.makeFocused(index: idx)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self,
+                          let idx = self.terminals.firstIndex(where: { $0.id == targetId }) else { return }
+                    self.makeFocused(index: idx)
+                }
             }
         } else {
             // Was the last terminal — re-create one and focus it.
+            // addTerminal() already uses double-async for focus.
             addTerminal()
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.makeFocused(index: self.terminals.count - 1)
-            }
         }
     }
 
     func focusPreviousPane() {
         if isCommandPalettePresented { dismissCommandPalette() }
         guard terminals.count > 1 else { return }
-        let currentIndex = terminals.firstIndex(where: { $0.isFocused }) ?? 0
+        let currentIndex: Int
+        if let t = contextualTerminal, let idx = terminals.firstIndex(where: { $0.id == t.id }) {
+            currentIndex = idx
+        } else {
+            currentIndex = 0
+        }
         let newIndex = (currentIndex - 1 + terminals.count) % terminals.count
         makeFocused(index: newIndex)
     }
@@ -769,7 +794,12 @@ class TerminalContainerViewModel: ObservableObject {
     func focusNextPane() {
         if isCommandPalettePresented { dismissCommandPalette() }
         guard terminals.count > 1 else { return }
-        let currentIndex = terminals.firstIndex(where: { $0.isFocused }) ?? 0
+        let currentIndex: Int
+        if let t = contextualTerminal, let idx = terminals.firstIndex(where: { $0.id == t.id }) {
+            currentIndex = idx
+        } else {
+            currentIndex = 0
+        }
         let newIndex = (currentIndex + 1) % terminals.count
         makeFocused(index: newIndex)
     }
@@ -777,7 +807,8 @@ class TerminalContainerViewModel: ObservableObject {
     /// Swap the focused pane one position to the left (wrapping around).
     func movePaneLeft() {
         guard terminals.count > 1 else { return }
-        guard let currentIndex = terminals.firstIndex(where: { $0.isFocused }) else { return }
+        guard let terminal = contextualTerminal,
+              let currentIndex = terminals.firstIndex(where: { $0.id == terminal.id }) else { return }
         let destIndex = (currentIndex - 1 + terminals.count) % terminals.count
         guard destIndex != currentIndex else { return }
         terminals.swapAt(currentIndex, destIndex)
@@ -787,7 +818,8 @@ class TerminalContainerViewModel: ObservableObject {
     /// Swap the focused pane one position to the right (wrapping around).
     func movePaneRight() {
         guard terminals.count > 1 else { return }
-        guard let currentIndex = terminals.firstIndex(where: { $0.isFocused }) else { return }
+        guard let terminal = contextualTerminal,
+              let currentIndex = terminals.firstIndex(where: { $0.id == terminal.id }) else { return }
         let destIndex = (currentIndex + 1) % terminals.count
         guard destIndex != currentIndex else { return }
         terminals.swapAt(currentIndex, destIndex)
@@ -863,9 +895,9 @@ class TerminalContainerViewModel: ObservableObject {
     func executeAction(_ action: Action, withValues values: [String: String]) {
         guard let command = ActionInterpreter.buildCommand(for: action) else { return }
 
-        let focusedTerminal = terminals.first(where: { $0.isFocused })
-        let directory = focusedTerminal?.directory ?? NSHomeDirectory()
-        let paneWidth = focusedTerminal?.paneWidth ?? TerminalModel.defaultPaneWidth
+        let sourceTerminal = contextualTerminal
+        let directory = sourceTerminal?.directory ?? NSHomeDirectory()
+        let paneWidth = sourceTerminal?.paneWidth ?? TerminalModel.defaultPaneWidth
 
         // Build environment variables
         var env: [String: String] = values
@@ -883,19 +915,24 @@ class TerminalContainerViewModel: ObservableObject {
             waitAfterCommand: true
         )
 
-        // Insert after the currently focused pane
-        if let focusedIndex = terminals.firstIndex(where: { $0.isFocused }) {
-            terminals.insert(terminal, at: focusedIndex + 1)
+        // Insert after the contextual pane
+        if let source = sourceTerminal,
+           let sourceIndex = terminals.firstIndex(where: { $0.id == source.id }) {
+            terminals.insert(terminal, at: sourceIndex + 1)
         } else {
             terminals.append(terminal)
         }
 
-        // Focus the new terminal
+        // Focus the new terminal.
+        // Double-async so that if the command palette's NSTextField is being
+        // torn down, it finishes resigning first responder before we claim it.
         let newId = terminal.id
         DispatchQueue.main.async { [weak self] in
-            guard let self = self,
-                  let idx = self.terminals.firstIndex(where: { $0.id == newId }) else { return }
-            self.makeFocused(index: idx)
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self,
+                      let idx = self.terminals.firstIndex(where: { $0.id == newId }) else { return }
+                self.makeFocused(index: idx)
+            }
         }
     }
 }
