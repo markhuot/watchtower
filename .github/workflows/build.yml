@@ -18,15 +18,14 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Cache libghostty
+      - name: Restore libghostty cache
         id: cache-libghostty
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ghostty/macos/GhosttyKit.xcframework
             ghostty/zig-out/share
           key: libghostty-${{ runner.os }}-${{ hashFiles('.gitmodules', 'ghostty/**/*.zig', 'ghostty/**/*.zon', 'ghostty/build.zig', 'ghostty/build.zig.zon') }}
-          save-always: true
 
       - name: Install Zig
         if: steps.cache-libghostty.outputs.cache-hit != 'true'
@@ -38,6 +37,15 @@ jobs:
         if: steps.cache-libghostty.outputs.cache-hit != 'true'
         working-directory: ghostty
         run: zig build -Doptimize=ReleaseFast -Demit-docs=false -Demit-xcframework=true -Demit-macos-app=false
+
+      - name: Save libghostty cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ghostty/macos/GhosttyKit.xcframework
+            ghostty/zig-out/share
+          key: libghostty-${{ runner.os }}-${{ hashFiles('.gitmodules', 'ghostty/**/*.zig', 'ghostty/**/*.zon', 'ghostty/build.zig', 'ghostty/build.zig.zon') }}
 
       - name: Import signing certificate
         env:
