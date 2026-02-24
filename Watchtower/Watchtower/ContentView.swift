@@ -1,32 +1,58 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import Combine
+import WebKit
+
+// MARK: - PendingFocus
+
+/// A one-shot focus token. Represents "focus this pane when its view appears."
+/// Used to eliminate double-async timing heuristics for first-responder management.
+class PendingFocus {
+    let paneId: UUID
+    private(set) var fulfilled = false
+
+    init(paneId: UUID) {
+        self.paneId = paneId
+    }
+
+    /// Called by the NSView when it enters the window hierarchy.
+    /// Returns true if this was the first call (focus should be claimed).
+    @discardableResult
+    func fulfill() -> Bool {
+        guard !fulfilled else { return false }
+        fulfilled = true
+        return true
+    }
+
+    /// Cancel the pending focus (e.g., another focus request superseded this one).
+    func cancel() {
+        fulfilled = true
+    }
+}
 
 struct ContentView: View {
-    @StateObject private var viewModel = TerminalContainerViewModel()
+    @StateObject private var viewModel = PaneContainerViewModel()
     @ObservedObject private var appManager = GhosttyAppManager.shared
 
-    /// Minimum width for focus mode: 150 columns using the same cell-width math.
-    private static let focusModeMinWidth: CGFloat = 150 * TerminalPaneWithHandle.estimatedCellWidth + 40
 
     var body: some View {
         GeometryReader { geometry in
             ScrollViewReader { scrollProxy in
                 ScrollView(.horizontal, showsIndicators: !viewModel.isFocusMode) {
                     HStack(spacing: 0) {
-                        ForEach(viewModel.terminals) { terminal in
+                        ForEach(viewModel.panes) { pane in
                             FocusModeWrapper(
-                                terminal: terminal,
-                                viewModel: viewModel,
-                                focusModeMinWidth: ContentView.focusModeMinWidth
+                                pane: pane,
+                                viewModel: viewModel
                             ) {
-                                TerminalPaneWithHandle(
-                                    terminal: terminal,
-                                    allTerminals: viewModel.terminals,
-                                    viewModel: viewModel
+                                PaneWithHandle(
+                                    pane: pane,
+                                    allPanes: viewModel.panes,
+                                    viewModel: viewModel,
+                                    windowWidth: geometry.size.width
                                 )
                             }
-                            .id(terminal.id)
+                            .id(pane.id)
                         }
                     }
                     .padding(10)
@@ -34,7 +60,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Scroll to the focused pane when entering focus mode
                 .onChange(of: viewModel.isFocusMode) { isFocused in
-                    if isFocused, let targetId = viewModel.focusModeTerminalId {
+                    if isFocused, let targetId = viewModel.focusModePaneId {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             scrollProxy.scrollTo(targetId, anchor: .center)
                         }
@@ -43,45 +69,51 @@ struct ContentView: View {
             }
         }
         .background(appManager.backgroundColor.ignoresSafeArea())
-        .focusedSceneValue(\.terminalViewModel, viewModel)
+        .focusedSceneValue(\.paneViewModel, viewModel)
         .onReceive(NotificationCenter.default.publisher(for: .ghosttySurfaceClosed)) { notification in
             if let view = notification.object as? GhosttyTerminalNSView {
-                viewModel.removeTerminal(byId: view.terminal.id)
+                viewModel.removePane(byId: view.terminal.id)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .browserPaneClosed)) { notification in
+            if let paneId = notification.userInfo?["paneId"] as? UUID {
+                viewModel.removePane(byId: paneId)
             }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                if viewModel.actions.isEmpty {
-                    Button(action: { viewModel.addTerminal() }) {
-                        Image(systemName: "plus")
+                Menu {
+                    Button("New Terminal") {
+                        let terminal = viewModel.addTerminal()
+                        viewModel.focusPane(terminal)
                     }
-                } else {
-                    Menu {
-                        Button("New Terminal") {
-                            viewModel.addTerminal()
-                        }
 
+                    Button("New Browser") {
+                        let browser = viewModel.addBrowser()
+                        viewModel.focusPane(browser)
+                    }
+
+                    Divider()
+
+                    // Project actions
+                    ForEach(viewModel.projectActions) { action in
+                        actionMenuButton(action)
+                    }
+
+                    // Separator between project and global actions
+                    if !viewModel.projectActions.isEmpty && !viewModel.globalActions.isEmpty {
                         Divider()
-
-                        // Project actions
-                        ForEach(viewModel.projectActions) { action in
-                            actionMenuButton(action)
-                        }
-
-                        // Separator between project and global actions
-                        if !viewModel.projectActions.isEmpty && !viewModel.globalActions.isEmpty {
-                            Divider()
-                        }
-
-                        // Global actions
-                        ForEach(viewModel.globalActions) { action in
-                            actionMenuButton(action)
-                        }
-                    } label: {
-                        Image(systemName: "plus")
-                    } primaryAction: {
-                        viewModel.addTerminal()
                     }
+
+                    // Global actions
+                    ForEach(viewModel.globalActions) { action in
+                        actionMenuButton(action)
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                } primaryAction: {
+                    let terminal = viewModel.addTerminal()
+                    viewModel.focusPane(terminal)
                 }
             }
         }
@@ -115,34 +147,28 @@ struct ContentView: View {
     }
 }
 
-/// Wraps a terminal pane with focus-mode visual treatment (width override,
-/// dimming, shadow) without bloating the main ContentView body.
+/// Wraps a pane with focus-mode visual treatment (dimming, shadow)
+/// without bloating the main ContentView body.
 struct FocusModeWrapper<Content: View>: View {
-    @ObservedObject var terminal: TerminalModel
-    @ObservedObject var viewModel: TerminalContainerViewModel
+    @ObservedObject var pane: PaneModel
+    @ObservedObject var viewModel: PaneContainerViewModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
-    let focusModeMinWidth: CGFloat
     let content: Content
 
-    init(terminal: TerminalModel,
-         viewModel: TerminalContainerViewModel,
-         focusModeMinWidth: CGFloat,
+    init(pane: PaneModel,
+         viewModel: PaneContainerViewModel,
          @ViewBuilder content: () -> Content) {
-        self.terminal = terminal
+        self.pane = pane
         self.viewModel = viewModel
-        self.focusModeMinWidth = focusModeMinWidth
         self.content = content()
     }
 
     private var isFocusModeTarget: Bool {
-        viewModel.isFocusMode && terminal.id == viewModel.focusModeTerminalId
+        viewModel.isFocusMode && pane.id == viewModel.focusModePaneId
     }
 
     var body: some View {
         content
-            .frame(width: isFocusModeTarget
-                ? max(terminal.paneWidth, focusModeMinWidth)
-                : nil)
             .overlay(focusModeDimOverlay)
             .shadow(
                 color: isFocusModeTarget ? .black.opacity(0.6) : .clear,
@@ -160,12 +186,13 @@ struct FocusModeWrapper<Content: View>: View {
     }
 }
 
-/// A terminal pane with a draggable resize handle on its right edge,
+/// A pane with a draggable resize handle on its right edge,
 /// and drop-target indicators on both edges for reordering.
-struct TerminalPaneWithHandle: View {
-    @ObservedObject var terminal: TerminalModel
-    let allTerminals: [TerminalModel]
-    @ObservedObject var viewModel: TerminalContainerViewModel
+struct PaneWithHandle: View {
+    @ObservedObject var pane: PaneModel
+    let allPanes: [PaneModel]
+    @ObservedObject var viewModel: PaneContainerViewModel
+    let windowWidth: CGFloat
 
     /// The absolute X position of the mouse in window coordinates when the drag started,
     /// along with the pane width at that moment. Using absolute coordinates avoids the
@@ -176,26 +203,30 @@ struct TerminalPaneWithHandle: View {
     /// Minimum pane width in points.
     private let minPaneWidth: CGFloat = 200
 
-    /// Approximate cell width in points (matches TerminalModel.defaultPaneWidth calculation).
+    /// Approximate cell width in points (matches PaneModel.defaultPaneWidth calculation).
     static let estimatedCellWidth: CGFloat = 9
 
-    /// Snap a width to the nearest cell boundary to prevent sub-cell jitter.
-    static func snapToGrid(_ width: CGFloat) -> CGFloat {
-        let padding: CGFloat = 40 // matches TerminalModel default padding
-        let cols = round((width - padding) / estimatedCellWidth)
-        return cols * estimatedCellWidth + padding
+    /// The effective width of this pane, accounting for focus mode.
+    /// When this pane is the focus-mode target the pane content itself
+    /// expands to the focus-mode minimum (which varies by pane type).
+    private var effectiveWidth: CGFloat {
+        let isFocusModeTarget = viewModel.isFocusMode && pane.id == viewModel.focusModePaneId
+        if isFocusModeTarget {
+            return max(pane.paneWidth, pane.focusModeMinWidth(windowWidth: windowWidth))
+        }
+        return pane.paneWidth
     }
 
-    /// The current index of this terminal in the array.
+    /// The current index of this pane in the array.
     private var index: Int {
-        allTerminals.firstIndex(where: { $0.id == terminal.id }) ?? 0
+        allPanes.firstIndex(where: { $0.id == pane.id }) ?? 0
     }
 
     /// Whether the left-edge drop indicator should be shown for this pane.
     private var showLeftIndicator: Bool {
         guard let dropSlot = viewModel.dropTargetIndex,
-              let dragId = viewModel.draggedTerminalId,
-              let dragIndex = allTerminals.firstIndex(where: { $0.id == dragId }) else {
+              let dragId = viewModel.draggedPaneId,
+              let dragIndex = allPanes.firstIndex(where: { $0.id == dragId }) else {
             return false
         }
         // Show left indicator on the first pane only when the drop slot is 0
@@ -206,8 +237,8 @@ struct TerminalPaneWithHandle: View {
     /// Whether the right-edge drop indicator should be shown for this pane.
     private var showRightIndicator: Bool {
         guard let dropSlot = viewModel.dropTargetIndex,
-              let dragId = viewModel.draggedTerminalId,
-              let dragIndex = allTerminals.firstIndex(where: { $0.id == dragId }) else {
+              let dragId = viewModel.draggedPaneId,
+              let dragIndex = allPanes.firstIndex(where: { $0.id == dragId }) else {
             return false
         }
         // Don't show if dropping here would be a no-op
@@ -223,16 +254,16 @@ struct TerminalPaneWithHandle: View {
                 DropIndicatorView(isActive: showLeftIndicator, targetSlot: 0, viewModel: viewModel)
             }
 
-            TerminalPaneView(terminal: terminal, viewModel: viewModel, onDragStarted: {
-                    viewModel.dragStarted(terminalId: terminal.id)
+            PaneView(pane: pane, viewModel: viewModel, onDragStarted: {
+                    viewModel.dragStarted(paneId: pane.id)
                 }, onHeaderTapped: {
-                    viewModel.focusTerminal(id: terminal.id)
+                    viewModel.focusPane(id: pane.id)
                 })
-                .frame(width: terminal.paneWidth)
-                .animation(nil, value: terminal.paneWidth)
+                .frame(width: effectiveWidth)
+                .animation(nil, value: pane.paneWidth)
                 .onDrop(of: [.text], delegate: PaneSplitDropDelegate(
                     paneIndex: index,
-                    paneWidth: terminal.paneWidth,
+                    paneWidth: pane.paneWidth,
                     viewModel: viewModel
                 ))
 
@@ -259,29 +290,26 @@ struct TerminalPaneWithHandle: View {
                                 // On first event, record the mouse's absolute X and the
                                 // current pane width. All subsequent events compute the
                                 // delta from this fixed anchor, so the handle shifting
-                                // due to snap-to-grid never feeds back into the calc.
+                                // never feeds back into the calc.
                                 if dragAnchor == nil {
-                                    dragAnchor = (startX: value.startLocation.x, startWidth: terminal.paneWidth)
+                                    dragAnchor = (startX: value.startLocation.x, startWidth: pane.paneWidth)
                                 }
 
                                 let anchor = dragAnchor!
                                 let delta = value.location.x - anchor.startX
-                                let rawWidth = max(minPaneWidth, anchor.startWidth + delta)
-
-                                // Snap to cell grid to prevent sub-cell jitter
-                                let newWidth = TerminalPaneWithHandle.snapToGrid(rawWidth)
+                                let newWidth = max(minPaneWidth, anchor.startWidth + delta)
 
                                 // Check if option key is held
                                 let optionHeld = NSEvent.modifierFlags.contains(.option)
 
                                 if optionHeld {
-                                    // Resize ALL terminals to the same width
-                                    for t in allTerminals {
-                                        t.paneWidth = newWidth
+                                    // Resize ALL panes to the same width
+                                    for p in allPanes {
+                                        p.paneWidth = newWidth
                                     }
                                 } else {
-                                    // Resize only this terminal
-                                    terminal.paneWidth = newWidth
+                                    // Resize only this pane
+                                    pane.paneWidth = newWidth
                                 }
                             }
                             .onEnded { _ in
@@ -300,7 +328,7 @@ struct TerminalPaneWithHandle: View {
 /// Each drop zone (left/right half of a pane) creates one of these with its target slot index.
 struct PaneDropDelegate: DropDelegate {
     let targetSlot: Int
-    let viewModel: TerminalContainerViewModel
+    let viewModel: PaneContainerViewModel
 
     func dropEntered(info: DropInfo) {
         withAnimation(.easeInOut(duration: 0.15)) {
@@ -323,16 +351,16 @@ struct PaneDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        guard let draggedId = viewModel.draggedTerminalId else { return false }
+        guard let draggedId = viewModel.draggedPaneId else { return false }
 
-        viewModel.moveTerminal(id: draggedId, toSlot: targetSlot)
+        viewModel.movePane(id: draggedId, toSlot: targetSlot)
         viewModel.cleanupDragState()
 
         return true
     }
 
     func validateDrop(info: DropInfo) -> Bool {
-        return viewModel.draggedTerminalId != nil
+        return viewModel.draggedPaneId != nil
     }
 }
 
@@ -341,7 +369,7 @@ struct PaneDropDelegate: DropDelegate {
 struct PaneSplitDropDelegate: DropDelegate {
     let paneIndex: Int
     let paneWidth: CGFloat
-    let viewModel: TerminalContainerViewModel
+    let viewModel: PaneContainerViewModel
 
     private func slotForLocation(_ info: DropInfo) -> Int {
         // info.location is in the coordinate space of the view the delegate is on.
@@ -378,16 +406,16 @@ struct PaneSplitDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         let slot = slotForLocation(info)
-        guard let draggedId = viewModel.draggedTerminalId else { return false }
+        guard let draggedId = viewModel.draggedPaneId else { return false }
 
-        viewModel.moveTerminal(id: draggedId, toSlot: slot)
+        viewModel.movePane(id: draggedId, toSlot: slot)
         viewModel.cleanupDragState()
 
         return true
     }
 
     func validateDrop(info: DropInfo) -> Bool {
-        return viewModel.draggedTerminalId != nil
+        return viewModel.draggedPaneId != nil
     }
 }
 
@@ -398,7 +426,7 @@ struct PaneSplitDropDelegate: DropDelegate {
 struct DropIndicatorView: View {
     let isActive: Bool
     let targetSlot: Int
-    @ObservedObject var viewModel: TerminalContainerViewModel
+    @ObservedObject var viewModel: PaneContainerViewModel
 
     @ObservedObject private var appManager = GhosttyAppManager.shared
 
@@ -417,23 +445,23 @@ struct DropIndicatorView: View {
     }
 }
 
-class TerminalContainerViewModel: ObservableObject {
-    @Published var terminals: [TerminalModel] = []
+class PaneContainerViewModel: ObservableObject {
+    @Published var panes: [PaneModel] = []
 
     /// The index of the slot where a dragged pane would be inserted.
     /// `nil` when no drag is active. 0 = before first pane, 1 = between first and second, etc.
     @Published var dropTargetIndex: Int? = nil
 
-    /// The ID of the terminal currently being dragged.
-    @Published var draggedTerminalId: UUID? = nil
+    /// The ID of the pane currently being dragged.
+    @Published var draggedPaneId: UUID? = nil
 
     /// Whether focus mode is active. In focus mode the currently focused pane
     /// floats above all other panes as a centered overlay.
     @Published var isFocusMode: Bool = false
 
-    /// The ID of the terminal that was focused when focus mode was entered.
+    /// The ID of the pane that was focused when focus mode was entered.
     /// Stored so that switching focus exits focus mode cleanly.
-    @Published var focusModeTerminalId: UUID? = nil
+    @Published var focusModePaneId: UUID? = nil
 
     /// The git repo root for the currently focused terminal's directory.
     /// `nil` when not in a git repo.
@@ -442,15 +470,27 @@ class TerminalContainerViewModel: ObservableObject {
     /// Discovered actions for the focused terminal's project.
     @Published var actions: [Action] = []
 
-    /// The ID of the terminal that the command palette is open on,
+    /// The ID of the pane that the command palette is open on,
     /// or `nil` when the palette is closed. Stored explicitly so the
     /// palette stays visible even when the NSTextField steals first
     /// responder from the terminal's NSView (which clears isFocused).
-    @Published var commandPaletteTerminalId: UUID? = nil
+    @Published var commandPalettePaneId: UUID? = nil
+
+    /// When set, the next NSView matching this pane ID to enter the window
+    /// hierarchy will claim first responder. Setting a new value automatically
+    /// cancels the previous one via `didSet`, preventing races.
+    var pendingFocus: PendingFocus? {
+        didSet { oldValue?.cancel() }
+    }
+
+    /// Monotonically increasing counter bumped every time `focusPane` is
+    /// called. Used by `dismissCommandPalette` to detect whether an action
+    /// explicitly requested focus (in which case dismiss should not override it).
+    private(set) var focusGeneration: UInt = 0
 
     /// Convenience: whether the command palette is currently visible.
     var isCommandPalettePresented: Bool {
-        commandPaletteTerminalId != nil
+        commandPalettePaneId != nil
     }
 
     /// Whether the action dialog is shown.
@@ -469,30 +509,32 @@ class TerminalContainerViewModel: ObservableObject {
         actions.filter { $0.isGlobal }
     }
 
-    /// The terminal that should provide context for actions and other operations.
-    /// Checks the command palette's terminal first (since its NSTextField steals
-    /// first responder, no terminal has `isFocused == true` while the palette is
-    /// open), then falls back to the actually focused terminal.
-    var contextualTerminal: TerminalModel? {
-        if let paletteId = commandPaletteTerminalId,
-           let t = terminals.first(where: { $0.id == paletteId }) {
-            return t
+    /// The pane that should provide context for actions and other operations.
+    /// Checks the command palette's pane first (since its NSTextField steals
+    /// first responder, no pane has `isFocused == true` while the palette is
+    /// open), then falls back to the actually focused pane.
+    var contextualPane: PaneModel? {
+        if let paletteId = commandPalettePaneId,
+           let p = panes.first(where: { $0.id == paletteId }) {
+            return p
         }
-        return terminals.first(where: { $0.isFocused })
+        return panes.first(where: { $0.isFocused })
     }
 
-    /// The contextual terminal's current working directory.
+    /// The contextual pane's current working directory.
+    /// Returns the home directory when no pane is focused or
+    /// when the focused pane has no directory (e.g. browser panes).
     var focusedDirectory: String {
-        contextualTerminal?.directory ?? NSHomeDirectory()
+        contextualPane?.directory ?? NSHomeDirectory()
     }
 
     /// Event monitor for detecting when a drag session ends (mouse up).
     private var dragEndMonitor: Any? = nil
 
-    /// Subject that emits the currently focused terminal. Used to drive
-    /// the `switchToLatest` pipeline that tracks the focused terminal's
+    /// Subject that emits the currently focused pane. Used to drive
+    /// the `switchToLatest` pipeline that tracks the focused pane's
     /// directory for git detection and action discovery.
-    private let focusedTerminalSubject = CurrentValueSubject<TerminalModel?, Never>(nil)
+    private let focusedPaneSubject = CurrentValueSubject<PaneModel?, Never>(nil)
 
     /// Bag holding the Combine pipeline subscriptions.
     private var cancellables = Set<AnyCancellable>()
@@ -505,24 +547,40 @@ class TerminalContainerViewModel: ObservableObject {
 
     init() {
         // Set up a Combine pipeline that:
-        // 1. Watches which terminal is focused (via focusedTerminalSubject)
-        // 2. switchToLatest subscribes to the focused terminal's $directory
+        // 1. Watches which pane is focused (via focusedPaneSubject)
+        // 2. For terminal panes, switchToLatest subscribes to $terminalDirectory
         // 3. On each new directory, runs git detection and action discovery
-        focusedTerminalSubject
+        // 4. For non-terminal panes (e.g. browser), emits nil to clear state
+        focusedPaneSubject
             .compactMap { $0 }
-            .map { terminal in
-                terminal.$directory
-                    .removeDuplicates()
+            .map { pane -> AnyPublisher<String?, Never> in
+                if let terminal = pane as? TerminalPaneModel {
+                    return terminal.$terminalDirectory
+                        .removeDuplicates()
+                        .map { Optional($0) }
+                        .eraseToAnyPublisher()
+                } else {
+                    // Non-terminal panes have no directory
+                    return Just(nil as String?).eraseToAnyPublisher()
+                }
             }
             .switchToLatest()
             .sink { [weak self] directory in
-                self?.detectGitRepo(for: directory)
-                self?.discoverActions(for: directory)
+                if let directory = directory {
+                    self?.detectGitRepo(for: directory)
+                    self?.discoverActions(for: directory)
+                } else {
+                    // Browser pane or no directory — clear git/actions
+                    self?.gitDetectionTask?.cancel()
+                    self?.gitRepoRoot = nil
+                    self?.actionDiscoveryTask?.cancel()
+                    self?.actions = []
+                }
             }
             .store(in: &cancellables)
 
-        // Also handle the nil case (no focused terminal) to clear state
-        focusedTerminalSubject
+        // Also handle the nil case (no focused pane) to clear state
+        focusedPaneSubject
             .filter { $0 == nil }
             .sink { [weak self] _ in
                 self?.gitDetectionTask?.cancel()
@@ -533,7 +591,8 @@ class TerminalContainerViewModel: ObservableObject {
             .store(in: &cancellables)
 
         // Start with one terminal
-        addTerminal()
+        let initial = addTerminal()
+        focusPane(initial)
     }
 
     deinit {
@@ -543,8 +602,8 @@ class TerminalContainerViewModel: ObservableObject {
     }
 
     /// Call when a drag session begins to install cleanup monitoring.
-    func dragStarted(terminalId: UUID) {
-        draggedTerminalId = terminalId
+    func dragStarted(paneId: UUID) {
+        draggedPaneId = paneId
 
         // Install a one-shot local event monitor that cleans up drag state
         // when the mouse button is released (drag session ends).
@@ -562,9 +621,9 @@ class TerminalContainerViewModel: ObservableObject {
     /// Reset all drag-related state.
     func cleanupDragState() {
         dropTargetIndex = nil
-        draggedTerminalId = nil
-        for terminal in terminals {
-            terminal.isDragging = false
+        draggedPaneId = nil
+        for pane in panes {
+            pane.isDragging = false
         }
         if let monitor = dragEndMonitor {
             NSEvent.removeMonitor(monitor)
@@ -572,17 +631,17 @@ class TerminalContainerViewModel: ObservableObject {
         }
     }
 
-    /// Toggle focus mode on the currently focused terminal.
+    /// Toggle focus mode on the currently focused pane.
     /// If focus mode is already active, it is deactivated.
     func toggleFocusMode() {
         if isFocusMode {
             withAnimation(.easeInOut(duration: 0.2)) {
                 isFocusMode = false
-                focusModeTerminalId = nil
+                focusModePaneId = nil
             }
         } else {
-            guard let focused = contextualTerminal else { return }
-            focusModeTerminalId = focused.id
+            guard let focused = contextualPane else { return }
+            focusModePaneId = focused.id
             withAnimation(.easeInOut(duration: 0.2)) {
                 isFocusMode = true
             }
@@ -596,67 +655,77 @@ class TerminalContainerViewModel: ObservableObject {
         if isCommandPalettePresented {
             dismissCommandPalette()
         } else {
-            // Open the palette on the currently focused terminal
-            if let focused = terminals.first(where: { $0.isFocused }) {
-                commandPaletteTerminalId = focused.id
+            // Open the palette on the currently focused pane
+            if let focused = panes.first(where: { $0.isFocused }) {
+                commandPalettePaneId = focused.id
             }
         }
     }
 
-    /// Dismiss the command palette and restore focus to the terminal.
-    /// - Parameter restoreFocus: When `true` (the default), first responder
-    ///   is returned to the terminal that had the palette. Pass `false` when
-    ///   the action being executed will manage focus itself (e.g. creating a
-    ///   new terminal).
-    func dismissCommandPalette(restoreFocus: Bool = true) {
-        guard let terminalId = commandPaletteTerminalId else { return }
-        commandPaletteTerminalId = nil
-
-        guard restoreFocus else { return }
-
-        // Restore focus to the terminal that had the palette.
-        // We need a two-phase delay: the first async lets SwiftUI process
-        // the state change and begin tearing down the palette's NSTextField.
-        // The second async ensures the text field has fully resigned first
-        // responder before we try to claim it for the terminal view.
-        DispatchQueue.main.async { [weak self] in
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self,
-                      let index = self.terminals.firstIndex(where: { $0.id == terminalId }) else { return }
-                self.makeFocused(index: index)
-            }
+    /// Dismiss the command palette. If no `focusPane` call was made since
+    /// `beforeGeneration` was captured, focus is restored to the pane that
+    /// had the palette. If an action called `focusPane()` (bumping the
+    /// generation), the action's focus request is preserved.
+    ///
+    /// When called without a generation (e.g. Esc, click-to-dismiss),
+    /// focus is always restored to the original pane.
+    func dismissCommandPalette(beforeGeneration: UInt? = nil) {
+        guard let paneId = commandPalettePaneId else { return }
+        commandPalettePaneId = nil  // tear down the palette UI
+        // Restore focus unless an action explicitly called focusPane()
+        if beforeGeneration == nil || focusGeneration == beforeGeneration {
+            focusPaneById(paneId)
         }
     }
 
-    /// Close the currently focused terminal pane.
+    /// Close the currently focused pane.
     /// If multiple panes exist, closes just the focused one (with confirmation
     /// if an active session is running). If it's the only pane, closes the window.
     func closeCurrentPane() {
-        guard let focusedTerminal = contextualTerminal else { return }
+        guard let focusedPane = contextualPane else { return }
         guard let window = NSApp.keyWindow,
               let contentView = window.contentView else { return }
 
-        let terminalViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
-
-        if terminalViews.count > 1 {
-            // Multiple panes — find the focused NSView and check for active session.
-            if let targetView = terminalViews.first(where: { $0.terminal.id == focusedTerminal.id }),
-               let surface = targetView.surface,
-               ghostty_surface_needs_confirm_quit(surface) {
-                // Show confirmation alert, then call removeTerminal(byId:) on confirm.
-                let alert = NSAlert()
-                alert.messageText = "Close Terminal?"
-                alert.informativeText = "This terminal has an active session. Closing it will terminate the session."
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "Close")
-                alert.addButton(withTitle: "Cancel")
-                alert.beginSheetModal(for: window) { [weak self] response in
-                    if response == .alertFirstButtonReturn {
-                        self?.removeTerminal(byId: focusedTerminal.id)
+        if panes.count > 1 {
+            if let terminal = focusedPane as? TerminalPaneModel {
+                // Terminal pane — check for active session
+                let terminalViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
+                if let targetView = terminalViews.first(where: { $0.terminal.id == terminal.id }),
+                   let surface = targetView.surface,
+                   ghostty_surface_needs_confirm_quit(surface) {
+                    let alert = NSAlert()
+                    alert.messageText = "Close Terminal?"
+                    alert.informativeText = "This terminal has an active session. Closing it will terminate the session."
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "Close")
+                    alert.addButton(withTitle: "Cancel")
+                    alert.beginSheetModal(for: window) { [weak self] response in
+                        if response == .alertFirstButtonReturn {
+                            self?.removePane(byId: focusedPane.id)
+                        }
                     }
+                } else {
+                    removePane(byId: focusedPane.id)
+                }
+            } else if let browser = focusedPane as? BrowserPaneModel {
+                // Browser pane — check for form interaction
+                if browser.hasInteractedForms {
+                    let alert = NSAlert()
+                    alert.messageText = "Close Browser Pane?"
+                    alert.informativeText = "There are unsaved changes on this page that will be lost."
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "Close")
+                    alert.addButton(withTitle: "Cancel")
+                    alert.beginSheetModal(for: window) { [weak self] response in
+                        if response == .alertFirstButtonReturn {
+                            self?.removePane(byId: focusedPane.id)
+                        }
+                    }
+                } else {
+                    removePane(byId: focusedPane.id)
                 }
             } else {
-                removeTerminal(byId: focusedTerminal.id)
+                removePane(byId: focusedPane.id)
             }
         } else {
             // Single pane — close the window.
@@ -669,57 +738,61 @@ class TerminalContainerViewModel: ObservableObject {
         guard isFocusMode else { return }
         withAnimation(.easeInOut(duration: 0.2)) {
             isFocusMode = false
-            focusModeTerminalId = nil
+            focusModePaneId = nil
         }
     }
 
-    func addTerminal() {
+    @discardableResult
+    func addTerminal() -> TerminalPaneModel {
         // Inherit the working directory and pane width from the contextual
-        // terminal, falling back to defaults when nothing is focused.
-        let sourceTerminal = contextualTerminal
-        let directory = sourceTerminal?.directory ?? NSHomeDirectory()
-        let paneWidth = sourceTerminal?.paneWidth ?? TerminalModel.defaultPaneWidth
+        // pane, falling back to defaults when nothing is focused.
+        let sourcePane = contextualPane
+        let directory = sourcePane?.directory ?? NSHomeDirectory()
+        let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
 
-        let terminal = TerminalModel(
+        let terminal = TerminalPaneModel(
             id: UUID(),
-            title: "Terminal \(terminals.count + 1)",
+            title: "Terminal \(panes.count + 1)",
             status: .active,
             directory: directory,
             paneWidth: paneWidth
         )
+        terminal.viewModel = self
 
         // Insert after the contextual pane, or append at the end if none is focused
-        if let source = sourceTerminal,
-           let sourceIndex = terminals.firstIndex(where: { $0.id == source.id }) {
-            terminals.insert(terminal, at: sourceIndex + 1)
+        if let source = sourcePane,
+           let sourceIndex = panes.firstIndex(where: { $0.id == source.id }) {
+            panes.insert(terminal, at: sourceIndex + 1)
         } else {
-            terminals.append(terminal)
+            panes.append(terminal)
         }
 
-        // Focus the new terminal after SwiftUI has time to create the view.
-        // Uses a double-async so that if the command palette's NSTextField is
-        // being torn down (which resigns first responder asynchronously), the
-        // teardown completes before we claim first responder for the new pane.
-        let newId = terminal.id
-        DispatchQueue.main.async { [weak self] in
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self,
-                      let idx = self.terminals.firstIndex(where: { $0.id == newId }) else {
-                    return
-                }
-                self.makeFocused(index: idx)
-            }
+        return terminal
+    }
+
+    @discardableResult
+    func addBrowser(url: URL = URL(string: "about:blank")!) -> BrowserPaneModel {
+        let sourcePane = contextualPane
+        let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
+
+        let browser = BrowserPaneModel(url: url, paneWidth: paneWidth)
+        browser.viewModel = self
+
+        // Insert after the contextual pane, or append at the end if none is focused
+        if let source = sourcePane,
+           let sourceIndex = panes.firstIndex(where: { $0.id == source.id }) {
+            panes.insert(browser, at: sourceIndex + 1)
+        } else {
+            panes.append(browser)
         }
+
+        return browser
     }
 
-    func removeTerminal(_ terminal: TerminalModel) {
-        removeTerminal(byId: terminal.id)
-    }
-
-    /// Move a terminal from its current position to a new slot index.
+    /// Move a pane from its current position to a new slot index.
     /// `toSlot` is in pre-removal coordinates (0 = before first, count = after last).
-    func moveTerminal(id: UUID, toSlot slot: Int) {
-        guard let fromIndex = terminals.firstIndex(where: { $0.id == id }) else { return }
+    func movePane(id: UUID, toSlot slot: Int) {
+        guard let fromIndex = panes.firstIndex(where: { $0.id == id }) else { return }
 
         // Determine the actual destination index after removal
         var destIndex = slot
@@ -727,128 +800,186 @@ class TerminalContainerViewModel: ObservableObject {
             // Account for the item being removed before insertion
             destIndex -= 1
         }
-        destIndex = max(0, min(destIndex, terminals.count - 1))
+        destIndex = max(0, min(destIndex, panes.count - 1))
 
         guard destIndex != fromIndex else { return }
 
-        let terminal = terminals.remove(at: fromIndex)
-        terminals.insert(terminal, at: destIndex)
+        let pane = panes.remove(at: fromIndex)
+        panes.insert(pane, at: destIndex)
     }
 
-    func removeTerminal(byId id: UUID) {
-        // Exit focus mode if the removed terminal was the focus-mode target
-        if id == focusModeTerminalId {
+    func removePane(byId id: UUID) {
+        // Exit focus mode if the removed pane was the focus-mode target
+        if id == focusModePaneId {
             exitFocusMode()
         }
 
-        guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = panes.firstIndex(where: { $0.id == id }) else { return }
 
-        // Determine which terminal to focus after removal.
-        let focusIndex: Int?
-        if terminals.count <= 1 {
-            // Last terminal — we'll create a new one and focus it.
-            focusIndex = nil
-        } else if index > 0 {
-            // Prefer the terminal immediately to the left.
-            focusIndex = index - 1
+        // Determine which pane to focus after removal.
+        let neighborId: UUID
+        if panes.count > 1 {
+            let focusIndex = index > 0 ? index - 1 : 1
+            neighborId = panes[focusIndex].id
         } else {
-            // Leftmost terminal removed — focus the one to the right
-            // (which will shift into index 0 after removal).
-            focusIndex = 0
+            // Last pane — create a new one and use its ID.
+            let newTerminal = addTerminal()
+            neighborId = newTerminal.id
         }
 
-        terminals.remove(at: index)
-
-        if let focusIndex = focusIndex {
-            // Focus the neighbor after SwiftUI reconciles the view hierarchy.
-            // Double-async so that if the command palette's NSTextField is being
-            // torn down, it finishes resigning first responder before we claim it.
-            let targetId = terminals[focusIndex].id
-            DispatchQueue.main.async { [weak self] in
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self,
-                          let idx = self.terminals.firstIndex(where: { $0.id == targetId }) else { return }
-                    self.makeFocused(index: idx)
-                }
-            }
-        } else {
-            // Was the last terminal — re-create one and focus it.
-            // addTerminal() already uses double-async for focus.
-            addTerminal()
-        }
+        panes.remove(at: index)
+        focusPaneById(neighborId)
     }
 
     func focusPreviousPane() {
-        if isCommandPalettePresented { dismissCommandPalette() }
-        guard terminals.count > 1 else { return }
+        let currentPane = contextualPane
+        guard panes.count > 1 else { return }
         let currentIndex: Int
-        if let t = contextualTerminal, let idx = terminals.firstIndex(where: { $0.id == t.id }) {
+        if let p = currentPane, let idx = panes.firstIndex(where: { $0.id == p.id }) {
             currentIndex = idx
         } else {
             currentIndex = 0
         }
-        let newIndex = (currentIndex - 1 + terminals.count) % terminals.count
-        makeFocused(index: newIndex)
+        let newIndex = (currentIndex - 1 + panes.count) % panes.count
+        focusPane(panes[newIndex])
     }
 
     func focusNextPane() {
-        if isCommandPalettePresented { dismissCommandPalette() }
-        guard terminals.count > 1 else { return }
+        let currentPane = contextualPane
+        guard panes.count > 1 else { return }
         let currentIndex: Int
-        if let t = contextualTerminal, let idx = terminals.firstIndex(where: { $0.id == t.id }) {
+        if let p = currentPane, let idx = panes.firstIndex(where: { $0.id == p.id }) {
             currentIndex = idx
         } else {
             currentIndex = 0
         }
-        let newIndex = (currentIndex + 1) % terminals.count
-        makeFocused(index: newIndex)
+        let newIndex = (currentIndex + 1) % panes.count
+        focusPane(panes[newIndex])
     }
 
     /// Swap the focused pane one position to the left (wrapping around).
     func movePaneLeft() {
-        guard terminals.count > 1 else { return }
-        guard let terminal = contextualTerminal,
-              let currentIndex = terminals.firstIndex(where: { $0.id == terminal.id }) else { return }
-        let destIndex = (currentIndex - 1 + terminals.count) % terminals.count
+        guard panes.count > 1 else { return }
+        guard let pane = contextualPane,
+              let currentIndex = panes.firstIndex(where: { $0.id == pane.id }) else { return }
+        let destIndex = (currentIndex - 1 + panes.count) % panes.count
         guard destIndex != currentIndex else { return }
-        terminals.swapAt(currentIndex, destIndex)
-        makeFocused(index: destIndex)
+        panes.swapAt(currentIndex, destIndex)
+        focusPane(pane)
     }
 
     /// Swap the focused pane one position to the right (wrapping around).
     func movePaneRight() {
-        guard terminals.count > 1 else { return }
-        guard let terminal = contextualTerminal,
-              let currentIndex = terminals.firstIndex(where: { $0.id == terminal.id }) else { return }
-        let destIndex = (currentIndex + 1) % terminals.count
+        guard panes.count > 1 else { return }
+        guard let pane = contextualPane,
+              let currentIndex = panes.firstIndex(where: { $0.id == pane.id }) else { return }
+        let destIndex = (currentIndex + 1) % panes.count
         guard destIndex != currentIndex else { return }
-        terminals.swapAt(currentIndex, destIndex)
-        makeFocused(index: destIndex)
+        panes.swapAt(currentIndex, destIndex)
+        focusPane(pane)
     }
 
-    /// Focus a terminal by its ID (e.g. when the header is clicked).
-    func focusTerminal(id: UUID) {
-        if isCommandPalettePresented { dismissCommandPalette() }
-        guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
-        makeFocused(index: index)
+    /// Focus a pane by its ID (e.g. when the header is clicked).
+    func focusPane(id: UUID) {
+        guard let pane = panes.first(where: { $0.id == id }) else { return }
+        focusPane(pane)
     }
 
-    private func makeFocused(index: Int) {
-        let terminal = terminals[index]
-
-        // Push the focused terminal into the subject so the Combine pipeline
-        // picks up its $directory publisher (and re-runs git detection).
-        focusedTerminalSubject.send(terminal)
-
-        guard let window = NSApp.keyWindow,
-              let contentView = window.contentView else { return }
-
-        let allViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
-
-        // Match by terminal ID
-        if let targetView = allViews.first(where: { $0.terminal.id == terminal.id }) {
-            window.makeFirstResponder(targetView)
+    /// Focus a pane. If the NSView is already in the hierarchy, focus it
+    /// immediately and fulfill the token. If not (just created), the token
+    /// remains pending and viewDidMoveToWindow will pick it up.
+    func focusPane(_ pane: PaneModel) {
+        // Auto-dismiss the command palette when focus moves to a different pane.
+        if let paletteId = commandPalettePaneId, paletteId != pane.id {
+            commandPalettePaneId = nil
         }
+
+        // Reactive focus-mode update: when focus mode is active, the spotlight
+        // follows the focused pane so it never drifts out of sync.
+        if isFocusMode {
+            focusModePaneId = pane.id
+        }
+
+        // Update the Combine pipeline for git detection / action discovery
+        focusedPaneSubject.send(pane)
+
+        // Bump the generation so dismissCommandPalette can detect that
+        // an action explicitly requested focus.
+        focusGeneration &+= 1
+
+        // Set pendingFocus — cancels any prior pending focus via didSet
+        pendingFocus = PendingFocus(paneId: pane.id)
+
+        // Try immediate focus (view already in hierarchy)
+        if makeFocusedImmediate(pane: pane) {
+            pendingFocus?.fulfill()
+            pendingFocus = nil
+            return
+        }
+
+        // View doesn't exist yet (just added to panes array).
+        // viewDidMoveToWindow on the NSView will check pendingFocus
+        // and claim first responder when it enters the window.
+        //
+        // Single-async fallback for the case where the view IS in the
+        // hierarchy but the command palette's NSTextField hasn't resigned
+        // first responder yet (its teardown is asynchronous).
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let pending = self.pendingFocus,
+                  pending.paneId == pane.id,
+                   !pending.fulfilled else {
+                return
+            }
+            if self.makeFocusedImmediate(pane: pane) {
+                pending.fulfill()
+                self.pendingFocus = nil
+            }
+        }
+    }
+
+    /// Convenience for focusing by ID (used by dismissCommandPalette).
+    func focusPaneById(_ id: UUID) {
+        guard let pane = panes.first(where: { $0.id == id }) else { return }
+        focusPane(pane)
+    }
+
+    /// Try to find the pane's NSView in the hierarchy and make it first
+    /// responder. Returns true if successful.
+    @discardableResult
+    private func makeFocusedImmediate(pane: PaneModel) -> Bool {
+        guard let window = NSApp.keyWindow,
+              let contentView = window.contentView else {
+            return false
+        }
+
+        if pane is TerminalPaneModel {
+            let allViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
+            if let targetView = allViews.first(where: { $0.terminal.id == pane.id }) {
+                window.makeFirstResponder(targetView)
+                return true
+            }
+        } else if pane is BrowserPaneModel {
+            if let webView = findWebView(for: pane.id, in: contentView) {
+                window.makeFirstResponder(webView)
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Walk the view hierarchy to find a WatchtowerWebView associated with a pane ID.
+    private func findWebView(for paneId: UUID, in view: NSView) -> WatchtowerWebView? {
+        if let webView = view as? WatchtowerWebView,
+           webView.browser?.id == paneId {
+            return webView
+        }
+        for subview in view.subviews {
+            if let found = findWebView(for: paneId, in: subview) {
+                return found
+            }
+        }
+        return nil
     }
 
     // MARK: - Git Detection
@@ -895,16 +1026,16 @@ class TerminalContainerViewModel: ObservableObject {
     func executeAction(_ action: Action, withValues values: [String: String]) {
         guard let command = ActionInterpreter.buildCommand(for: action) else { return }
 
-        let sourceTerminal = contextualTerminal
-        let directory = sourceTerminal?.directory ?? NSHomeDirectory()
-        let paneWidth = sourceTerminal?.paneWidth ?? TerminalModel.defaultPaneWidth
+        let sourcePane = contextualPane
+        let directory = sourcePane?.directory ?? NSHomeDirectory()
+        let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
 
         // Build environment variables
         var env: [String: String] = values
         env["WATCHTOWER_GIT_ROOT"] = gitRepoRoot ?? ""
         env["WATCHTOWER_ACTION"] = action.id  // filename
 
-        let terminal = TerminalModel(
+        let terminal = TerminalPaneModel(
             id: UUID(),
             title: action.displayName,
             status: .active,
@@ -914,26 +1045,18 @@ class TerminalContainerViewModel: ObservableObject {
             env: env,
             waitAfterCommand: true
         )
+        terminal.viewModel = self
 
         // Insert after the contextual pane
-        if let source = sourceTerminal,
-           let sourceIndex = terminals.firstIndex(where: { $0.id == source.id }) {
-            terminals.insert(terminal, at: sourceIndex + 1)
+        if let source = sourcePane,
+           let sourceIndex = panes.firstIndex(where: { $0.id == source.id }) {
+            panes.insert(terminal, at: sourceIndex + 1)
         } else {
-            terminals.append(terminal)
+            panes.append(terminal)
         }
 
-        // Focus the new terminal.
-        // Double-async so that if the command palette's NSTextField is being
-        // torn down, it finishes resigning first responder before we claim it.
-        let newId = terminal.id
-        DispatchQueue.main.async { [weak self] in
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self,
-                      let idx = self.terminals.firstIndex(where: { $0.id == newId }) else { return }
-                self.makeFocused(index: idx)
-            }
-        }
+        // Focus the new terminal
+        focusPane(terminal)
     }
 }
 

@@ -22,6 +22,9 @@
 		AA0000010000000000000017 /* ActionDialogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000017 /* ActionDialogView.swift */; };
 		AA0000010000000000000018 /* FuzzyMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000018 /* FuzzyMatch.swift */; };
 		AA0000010000000000000019 /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000019 /* CommandPaletteView.swift */; };
+		AA000001000000000000001A /* PaneModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001A /* PaneModel.swift */; };
+		AA000001000000000000001B /* BrowserPaneModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* BrowserPaneModel.swift */; };
+		AA000001000000000000001C /* BrowserWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001C /* BrowserWebView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +46,9 @@
 		AA0000020000000000000017 /* ActionDialogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionDialogView.swift; sourceTree = "<group>"; };
 		AA0000020000000000000018 /* FuzzyMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuzzyMatch.swift; sourceTree = "<group>"; };
 		AA0000020000000000000019 /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteView.swift; sourceTree = "<group>"; };
+		AA000002000000000000001A /* PaneModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneModel.swift; sourceTree = "<group>"; };
+		AA000002000000000000001B /* BrowserPaneModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserPaneModel.swift; sourceTree = "<group>"; };
+		AA000002000000000000001C /* BrowserWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserWebView.swift; sourceTree = "<group>"; };
 		AA0000030000000000000001 /* Watchtower.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Watchtower.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -86,6 +92,9 @@
 				AA0000020000000000000017 /* ActionDialogView.swift */,
 				AA0000020000000000000018 /* FuzzyMatch.swift */,
 				AA0000020000000000000019 /* CommandPaletteView.swift */,
+				AA000002000000000000001A /* PaneModel.swift */,
+				AA000002000000000000001B /* BrowserPaneModel.swift */,
+				AA000002000000000000001C /* BrowserWebView.swift */,
 			);
 			path = Watchtower/Watchtower;
 			sourceTree = "<group>";
@@ -181,6 +190,9 @@
 				AA0000010000000000000017 /* ActionDialogView.swift in Sources */,
 				AA0000010000000000000018 /* FuzzyMatch.swift in Sources */,
 				AA0000010000000000000019 /* CommandPaletteView.swift in Sources */,
+				AA000001000000000000001A /* PaneModel.swift in Sources */,
+				AA000001000000000000001B /* BrowserPaneModel.swift in Sources */,
+				AA000001000000000000001C /* BrowserWebView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

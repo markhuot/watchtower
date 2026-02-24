@@ -142,6 +142,10 @@ Useful files in `ghostty/macos/Sources/Ghostty/`:
 - `Ghostty.Input.swift` — input helpers
 - `Ghostty.Config.swift` — config management
 
+## Temporary Files
+
+Never read from or write to `/tmp` or any system temporary directory. If you need a temporary directory, use `.tmp/` in the project root (`/Users/markhuot/Sites/eyes/.tmp/`). Create it if it doesn't exist. This directory is gitignored and keeps all scratch files local to the project.
+
 ## Current State
 
 - Build succeeds (both ghostty lib and Watchtower app)

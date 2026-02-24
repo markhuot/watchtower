@@ -1,14 +1,10 @@
 import Foundation
 import Combine
 
-class TerminalModel: Identifiable, ObservableObject {
-    let id: UUID
-    @Published var title: String
-    @Published var status: TerminalStatus
-    @Published var paneWidth: CGFloat
-    @Published var isFocused: Bool = false
-    @Published var isDragging: Bool = false
-    @Published var directory: String
+class TerminalPaneModel: PaneModel {
+    @Published var terminalTitle: String
+    @Published var terminalStatus: PaneStatus
+    @Published var terminalDirectory: String
 
     /// The current git branch name for this terminal's working directory.
     /// `nil` when not inside a git repository.
@@ -25,8 +21,11 @@ class TerminalModel: Identifiable, ObservableObject {
     /// Set to `true` for workspace terminals with custom scripts.
     let waitAfterCommand: Bool
 
-    /// Default pane width: 80 columns * 9px per char + 40px padding
-    static let defaultPaneWidth: CGFloat = 80 * 9 + 40
+    /// Progress report from Ghostty's ConEmu OSC 9;4 protocol.
+    @Published var progressReport: PaneProgress? = nil
+
+    /// Auto-clear timer for progress reports (15 second timeout).
+    private var progressClearTimer: Timer? = nil
 
     /// In-flight git branch detection task, cancelled when directory changes.
     private var branchDetectionTask: Task<Void, Never>? = nil
@@ -37,40 +36,59 @@ class TerminalModel: Identifiable, ObservableObject {
     /// The directory path with the home directory prefix replaced by `~`.
     var abbreviatedDirectory: String {
         let home = NSHomeDirectory()
-        if directory == home {
+        if terminalDirectory == home {
             return "~"
-        } else if directory.hasPrefix(home + "/") {
-            return "~" + directory.dropFirst(home.count)
+        } else if terminalDirectory.hasPrefix(home + "/") {
+            return "~" + terminalDirectory.dropFirst(home.count)
         }
-        return directory
+        return terminalDirectory
     }
+
+    // MARK: - PaneModel overrides
+
+    override var title: String { terminalTitle }
+    override var subtitle: String? { abbreviatedDirectory + (gitBranch.map { ":" + $0 } ?? "") }
+    override var status: PaneStatus { terminalStatus }
+    override var progress: PaneProgress? { progressReport }
+    override var directory: String? { terminalDirectory }
 
     init(
         id: UUID,
         title: String,
-        status: TerminalStatus,
+        status: PaneStatus,
         directory: String,
-        paneWidth: CGFloat = TerminalModel.defaultPaneWidth,
+        paneWidth: CGFloat = PaneModel.defaultPaneWidth,
         command: String? = nil,
         env: [String: String]? = nil,
         waitAfterCommand: Bool = false
     ) {
-        self.id = id
-        self.title = title
-        self.status = status
-        self.directory = directory
-        self.paneWidth = paneWidth
+        self.terminalTitle = title
+        self.terminalStatus = status
+        self.terminalDirectory = directory
         self.command = command
         self.env = env
         self.waitAfterCommand = waitAfterCommand
 
+        super.init(id: id, paneWidth: paneWidth)
+
         // Reactively detect git branch whenever directory changes
-        $directory
+        $terminalDirectory
             .removeDuplicates()
             .sink { [weak self] dir in
                 self?.detectGitBranch(for: dir)
             }
             .store(in: &cancellables)
+    }
+
+    /// Update the progress report and reset the auto-clear timer.
+    func updateProgressReport(_ progress: PaneProgress?) {
+        progressReport = progress
+        progressClearTimer?.invalidate()
+        if progress != nil {
+            progressClearTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: false) { [weak self] _ in
+                self?.progressReport = nil
+            }
+        }
     }
 
     /// Detect the git branch for the given directory asynchronously.
@@ -88,13 +106,4 @@ class TerminalModel: Identifiable, ObservableObject {
             }
         }
     }
-}
-
-enum TerminalStatus {
-    /// The surface has an active foreground process (e.g. vim, a build).
-    case active
-    /// The surface is idle at a shell prompt — no foreground process running.
-    case idle
-    /// The child process exited with a non-zero exit code.
-    case failed
 }

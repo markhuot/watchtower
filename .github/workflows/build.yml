@@ -22,7 +22,9 @@ jobs:
         id: cache-libghostty
         uses: actions/cache@v4
         with:
-          path: ghostty/macos/GhosttyKit.xcframework
+          path: |
+            ghostty/macos/GhosttyKit.xcframework
+            ghostty/zig-out/share
           key: libghostty-${{ runner.os }}-${{ hashFiles('.gitmodules', 'ghostty/**/*.zig', 'ghostty/**/*.zon', 'ghostty/build.zig', 'ghostty/build.zig.zon') }}
           save-always: true
 
@@ -83,6 +85,25 @@ jobs:
             OTHER_CODE_SIGN_FLAGS=--timestamp \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
             build
+
+      - name: Bundle Ghostty resources
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP=build/Build/Products/Release/Watchtower.app/Contents/Resources
+          SHARE=ghostty/zig-out/share
+
+          # Shell integration & themes
+          cp -R "$SHARE/ghostty" "$APP/ghostty"
+
+          # Terminfo (needed for the ghostty TERM type and resource auto-detection)
+          cp -R "$SHARE/terminfo" "$APP/terminfo"
+
+          # Re-sign since we modified the bundle contents
+          codesign --force --sign "Developer ID Application" \
+            --timestamp \
+            --options runtime \
+            "$APP/../../.."
 
       - name: Notarize app
         if: github.ref == 'refs/heads/main'

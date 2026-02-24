@@ -10,38 +10,58 @@ struct CommandPaletteItem: Identifiable {
     let description: String?
     let shortcutText: String?
     let sourceTag: String?  // "[project]" or "[global]", nil for built-in
-    /// Whether the action manages focus itself (e.g. creating a new terminal).
-    /// When `true`, the palette will NOT restore focus to the original terminal
-    /// on dismiss — letting the action's own focus logic take effect.
-    let managesFocus: Bool
-    let action: (TerminalContainerViewModel) -> Void
+    /// Whether this item is a "query action" (Go to URL, Search the web)
+    /// that uses the palette text as input rather than matching against it.
+    let isQueryAction: Bool
+    /// Preview text shown on the right side for query actions.
+    let queryPreview: String?
+    let action: (PaneContainerViewModel) -> Void
 
     /// Create a built-in command item.
     static func builtIn(
         name: String,
         shortcut: String? = nil,
-        managesFocus: Bool = false,
-        action: @escaping (TerminalContainerViewModel) -> Void
+        action: @escaping (PaneContainerViewModel) -> Void
     ) -> CommandPaletteItem {
         CommandPaletteItem(
             displayName: name,
             description: nil,
             shortcutText: shortcut,
             sourceTag: nil,
-            managesFocus: managesFocus,
+            isQueryAction: false,
+            queryPreview: nil,
+            action: action
+        )
+    }
+
+    /// Create a query action item (Go to URL, Search the web).
+    static func queryAction(
+        name: String,
+        queryPreview: String,
+        action: @escaping (PaneContainerViewModel) -> Void
+    ) -> CommandPaletteItem {
+        CommandPaletteItem(
+            displayName: name,
+            description: nil,
+            shortcutText: nil,
+            sourceTag: nil,
+            isQueryAction: true,
+            queryPreview: queryPreview,
             action: action
         )
     }
 
     /// Create an item from a discovered Action.
-    /// Actions that trigger a new terminal pane manage focus themselves.
+    /// Actions that trigger a new terminal pane manage focus themselves
+    /// via `focusPane()` inside `triggerAction`.
     static func fromAction(_ actionModel: Action) -> CommandPaletteItem {
         CommandPaletteItem(
             displayName: actionModel.displayName,
             description: actionModel.descriptionText,
             shortcutText: nil,
             sourceTag: actionModel.isGlobal ? "[global]" : "[project]",
-            managesFocus: true,  // triggerAction creates a new pane and focuses it
+            isQueryAction: false,
+            queryPreview: nil,
             action: { viewModel in
                 viewModel.triggerAction(actionModel)
             }
@@ -60,10 +80,54 @@ struct FilteredPaletteItem: Identifiable {
     let score: Int
 }
 
+// MARK: - URL Detection
+
+/// Determine if a string looks like a URL rather than a search query.
+func isURLLike(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty else { return false }
+
+    // Contains a scheme
+    if trimmed.range(of: "^[a-zA-Z][a-zA-Z0-9+.-]*://", options: .regularExpression) != nil {
+        return true
+    }
+
+    // Starts with localhost
+    if trimmed.hasPrefix("localhost") {
+        return true
+    }
+
+    // Looks like a domain: no spaces, contains a dot, ends with TLD-like suffix
+    if !trimmed.contains(" ") && trimmed.contains(".") {
+        return true
+    }
+
+    return false
+}
+
+/// Normalize a URL string by adding a scheme if missing.
+func normalizeURL(_ text: String) -> URL? {
+    let trimmed = text.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty else { return nil }
+
+    // Already has a scheme
+    if trimmed.range(of: "^[a-zA-Z][a-zA-Z0-9+.-]*://", options: .regularExpression) != nil {
+        return URL(string: trimmed)
+    }
+
+    // localhost or IP addresses get http://
+    if trimmed.hasPrefix("localhost") || trimmed.range(of: "^\\d{1,3}\\.\\d{1,3}", options: .regularExpression) != nil {
+        return URL(string: "http://\(trimmed)")
+    }
+
+    // Everything else gets https://
+    return URL(string: "https://\(trimmed)")
+}
+
 // MARK: - Command Palette View
 
 struct CommandPaletteView: View {
-    @ObservedObject var viewModel: TerminalContainerViewModel
+    @ObservedObject var viewModel: PaneContainerViewModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
 
     @State private var filterText: String = ""
@@ -72,15 +136,25 @@ struct CommandPaletteView: View {
     private let maxVisibleItems = 10
     private let cornerRadius: CGFloat = 8
 
+    /// Whether the focused pane is a browser.
+    private var isBrowserFocused: Bool {
+        viewModel.contextualPane is BrowserPaneModel
+    }
+
     /// Build the full command list from built-in commands + discovered actions.
     private var allItems: [CommandPaletteItem] {
         var items: [CommandPaletteItem] = []
 
-        // Built-in commands
-        items.append(.builtIn(name: "New Terminal", shortcut: "\u{2318}T", managesFocus: true) { vm in
-            vm.addTerminal()
+        // Built-in commands (always visible)
+        items.append(.builtIn(name: "New Terminal", shortcut: "\u{2318}T") { vm in
+            let terminal = vm.addTerminal()
+            vm.focusPane(terminal)
         })
-        items.append(.builtIn(name: "Close Terminal", shortcut: "\u{2318}W", managesFocus: true) { vm in
+        items.append(.builtIn(name: "New Browser") { vm in
+            let browser = vm.addBrowser()
+            vm.focusPane(browser)
+        })
+        items.append(.builtIn(name: "Close Pane", shortcut: "\u{2318}W") { vm in
             vm.closeCurrentPane()
         })
         items.append(.builtIn(name: "Toggle Full Screen", shortcut: "\u{2303}\u{2318}F") { vm in
@@ -92,21 +166,49 @@ struct CommandPaletteView: View {
         items.append(.builtIn(name: "Zoom") { vm in
             NSApp.keyWindow?.zoom(nil)
         })
-        items.append(.builtIn(name: "Focus Previous Pane", shortcut: "\u{2318}\u{21E7}[", managesFocus: true) { vm in
+        items.append(.builtIn(name: "Focus Previous Pane", shortcut: "\u{2318}\u{21E7}[") { vm in
             vm.focusPreviousPane()
         })
-        items.append(.builtIn(name: "Focus Next Pane", shortcut: "\u{2318}\u{21E7}]", managesFocus: true) { vm in
+        items.append(.builtIn(name: "Focus Next Pane", shortcut: "\u{2318}\u{21E7}]") { vm in
             vm.focusNextPane()
         })
         items.append(.builtIn(name: "Toggle Focus Mode", shortcut: "\u{2318}\u{21E7}\u{21A9}") { vm in
             vm.toggleFocusMode()
         })
-        items.append(.builtIn(name: "Move Pane Left", shortcut: "\u{2318}\u{2325}[", managesFocus: true) { vm in
+        items.append(.builtIn(name: "Move Pane Left", shortcut: "\u{2318}\u{2325}[") { vm in
             vm.movePaneLeft()
         })
-        items.append(.builtIn(name: "Move Pane Right", shortcut: "\u{2318}\u{2325}]", managesFocus: true) { vm in
+        items.append(.builtIn(name: "Move Pane Right", shortcut: "\u{2318}\u{2325}]") { vm in
             vm.movePaneRight()
         })
+
+        // Browser-specific commands (only when browser pane is focused)
+        if isBrowserFocused {
+            items.append(.builtIn(name: "Go Back", shortcut: "\u{2318}[") { vm in
+                if let browser = vm.contextualPane as? BrowserPaneModel,
+                   let window = NSApp.keyWindow,
+                   let contentView = window.contentView,
+                   let webView = findWebView(for: browser.id, in: contentView) {
+                    webView.goBack()
+                }
+            })
+            items.append(.builtIn(name: "Go Forward", shortcut: "\u{2318}]") { vm in
+                if let browser = vm.contextualPane as? BrowserPaneModel,
+                   let window = NSApp.keyWindow,
+                   let contentView = window.contentView,
+                   let webView = findWebView(for: browser.id, in: contentView) {
+                    webView.goForward()
+                }
+            })
+            items.append(.builtIn(name: "Reload Page", shortcut: "\u{2318}R") { vm in
+                if let browser = vm.contextualPane as? BrowserPaneModel,
+                   let window = NSApp.keyWindow,
+                   let contentView = window.contentView,
+                   let webView = findWebView(for: browser.id, in: contentView) {
+                    webView.reload()
+                }
+            })
+        }
 
         // Project actions
         for action in viewModel.projectActions {
@@ -137,6 +239,7 @@ struct CommandPaletteView: View {
             }
         }
 
+        // Fuzzy-match regular items
         var results: [FilteredPaletteItem] = []
         for item in items {
             let nameMatch = fuzzyMatch(query: filterText, candidate: item.displayName)
@@ -162,6 +265,60 @@ struct CommandPaletteView: View {
 
         // Sort by score descending
         results.sort { $0.score > $1.score }
+
+        // Add query action items (Go to URL, Search the web) — always shown
+        // when query is non-empty, exempt from fuzzy matching
+        let queryText = filterText.trimmingCharacters(in: .whitespaces)
+        if !queryText.isEmpty {
+            let urlLike = isURLLike(queryText)
+
+            let goToURL = CommandPaletteItem.queryAction(
+                name: "Go to URL",
+                queryPreview: queryText
+            ) { vm in
+                guard let url = normalizeURL(queryText) else { return }
+                if let browser = vm.contextualPane as? BrowserPaneModel {
+                    browser.navigate(to: url)
+                } else {
+                    let browser = vm.addBrowser(url: url)
+                    vm.focusPane(browser)
+                }
+            }
+
+            let searchWeb = CommandPaletteItem.queryAction(
+                name: "Search the web",
+                queryPreview: queryText
+            ) { vm in
+                let encoded = queryText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? queryText
+                guard let url = URL(string: "https://duckduckgo.com/?q=\(encoded)") else { return }
+                if let browser = vm.contextualPane as? BrowserPaneModel {
+                    browser.navigate(to: url)
+                } else {
+                    let browser = vm.addBrowser(url: url)
+                    vm.focusPane(browser)
+                }
+            }
+
+            // URL-like queries: Go to URL first; non-URL: Search first
+            let firstAction = urlLike ? goToURL : searchWeb
+            let secondAction = urlLike ? searchWeb : goToURL
+
+            results.append(FilteredPaletteItem(
+                id: firstAction.id,
+                item: firstAction,
+                nameMatch: nil,
+                descriptionMatch: nil,
+                score: -1000  // below fuzzy matches
+            ))
+            results.append(FilteredPaletteItem(
+                id: secondAction.id,
+                item: secondAction,
+                nameMatch: nil,
+                descriptionMatch: nil,
+                score: -1001  // below first query action
+            ))
+        }
+
         return results
     }
 
@@ -173,6 +330,11 @@ struct CommandPaletteView: View {
     /// Whether there are more items than what's shown.
     private var hasMore: Bool {
         filteredItems.count > maxVisibleItems
+    }
+
+    /// Index of the first query action in visibleItems, for separator drawing.
+    private var queryActionSeparatorIndex: Int? {
+        visibleItems.firstIndex(where: { $0.item.isQueryAction })
     }
 
     var body: some View {
@@ -206,6 +368,14 @@ struct CommandPaletteView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, filteredItem in
+                        // Draw separator before query actions
+                        if index == queryActionSeparatorIndex && index > 0 {
+                            Divider()
+                                .background(Color.white.opacity(0.1))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 4)
+                        }
+
                         CommandPaletteRow(
                             item: filteredItem,
                             isSelected: index == selectedIndex,
@@ -256,13 +426,18 @@ struct CommandPaletteView: View {
     private func executeSelected() {
         guard selectedIndex >= 0 && selectedIndex < visibleItems.count else { return }
         let item = visibleItems[selectedIndex].item
-        // Run the action BEFORE dismissing so that `contextualTerminal` can
-        // still resolve via `commandPaletteTerminalId`. The action may create
-        // a new terminal that manages focus itself.
+        // Snapshot the focus generation before the action runs.
+        // If the action calls focusPane(), the generation advances and
+        // dismiss will preserve the action's focus target.
+        let gen = viewModel.focusGeneration
+        // Run the action BEFORE dismissing so that `contextualPane` can
+        // still resolve via `commandPalettePaneId`. Actions that create
+        // new panes call `focusPane()` which bumps `focusGeneration`.
         item.action(viewModel)
-        // If the action manages focus itself (e.g. New Terminal), skip
-        // restoring focus to the original pane on dismiss.
-        viewModel.dismissCommandPalette(restoreFocus: !item.managesFocus)
+        // Dismiss tears down the palette UI. If the generation hasn't
+        // changed (action didn't call focusPane), dismiss restores focus
+        // to the original pane. Otherwise, the action's focus is preserved.
+        viewModel.dismissCommandPalette(beforeGeneration: gen)
     }
 }
 
@@ -299,8 +474,15 @@ struct CommandPaletteRow: View {
 
             Spacer()
 
-            // Right-side tag: shortcut for built-in, source tag for actions
-            if let shortcut = item.item.shortcutText {
+            // Right-side: query preview for query actions, shortcut for built-in, source tag for actions
+            if let preview = item.item.queryPreview {
+                Text(preview)
+                    .foregroundColor(.white.opacity(0.4))
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 200, alignment: .trailing)
+            } else if let shortcut = item.item.shortcutText {
                 Text(shortcut)
                     .foregroundColor(.white.opacity(0.4))
                     .font(.system(size: 12, design: .monospaced))

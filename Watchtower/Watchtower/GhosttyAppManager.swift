@@ -29,6 +29,9 @@ class GhosttyAppManager: ObservableObject {
     /// Highlight color for focused pane border, from Ghostty theme or system accent.
     @Published private(set) var highlightColor: Color = Color.accentColor
 
+    /// Foreground color from Ghostty config, used for subtle UI elements like unfocused pane borders.
+    @Published private(set) var foregroundColor: Color = Color(white: 0.9)
+
     /// Whether the application window is currently active (key window in foreground).
     @Published private(set) var isWindowActive: Bool = true
 
@@ -39,6 +42,30 @@ class GhosttyAppManager: ObservableObject {
     private(set) var config: ghostty_config_t? = nil
 
     private init() {
+        // Point Ghostty at its resources (shell integration, terminfo, themes).
+        // In a release build this should be bundled inside the .app; during
+        // development we fall back to the zig-out build tree next to the
+        // ghostty submodule.
+        if ProcessInfo.processInfo.environment["GHOSTTY_RESOURCES_DIR"] == nil {
+            let bundled = Bundle.main.resourceURL?.appendingPathComponent("ghostty").path
+            // Use #filePath to locate the project root at compile time. This
+            // works reliably regardless of where DerivedData lives.
+            let projectRoot = NSString(string: #filePath).deletingLastPathComponent
+                .replacingOccurrences(of: "/Watchtower/Watchtower", with: "")
+            let zigOut = projectRoot + "/ghostty/zig-out/share/ghostty"
+
+            if let bundled = bundled,
+               FileManager.default.fileExists(atPath: bundled + "/shell-integration") {
+                setenv("GHOSTTY_RESOURCES_DIR", bundled, 1)
+                Self.logger.info("Using bundled resources at \(bundled)")
+            } else if FileManager.default.fileExists(atPath: zigOut + "/shell-integration") {
+                setenv("GHOSTTY_RESOURCES_DIR", zigOut, 1)
+                Self.logger.info("Using dev resources at \(zigOut)")
+            } else {
+                Self.logger.warning("Could not locate Ghostty resources — shell integration will be disabled")
+            }
+        }
+
         // Initialize ghostty global state
         if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCESS {
             Self.logger.critical("ghostty_init failed")
@@ -124,6 +151,9 @@ class GhosttyAppManager: ObservableObject {
         // Read highlight color: try selection-background, then cursor-color, then system accent
         self.highlightColor = Self.readHighlightColor(from: cfg)
 
+        // Read foreground color for subtle UI elements
+        self.foregroundColor = Self.readForegroundColor(from: cfg)
+
         Self.logger.info("GhosttyAppManager initialized successfully")
     }
 
@@ -201,6 +231,9 @@ class GhosttyAppManager: ObservableObject {
         case GHOSTTY_ACTION_PWD:
             return setPwd(app, target: target, v: action.action.pwd)
 
+        case GHOSTTY_ACTION_PROGRESS_REPORT:
+            return progressReport(app, target: target, v: action.action.progress_report)
+
         case GHOSTTY_ACTION_NEW_SPLIT,
              GHOSTTY_ACTION_NEW_WINDOW,
              GHOSTTY_ACTION_NEW_TAB,
@@ -259,7 +292,7 @@ class GhosttyAppManager: ObservableObject {
         guard let surface = target.target.surface else { return false }
         guard let view = surfaceView(from: surface) else { return false }
         let exitCode = v.exit_code
-        let status: TerminalStatus = exitCode == 0 ? .idle : .failed
+        let status: PaneStatus = exitCode == 0 ? .idle : .failed
         DispatchQueue.main.async {
             view.updateStatus(status)
         }
@@ -291,8 +324,42 @@ class GhosttyAppManager: ObservableObject {
         guard let pwdPtr = v.pwd else { return false }
         let pwd = String(cString: pwdPtr)
         DispatchQueue.main.async {
-            view.terminal.directory = pwd
+            view.terminal.terminalDirectory = pwd
             view.refreshStatusFromSurface()
+        }
+        return true
+    }
+
+    private static func progressReport(
+        _ app: ghostty_app_t,
+        target: ghostty_target_s,
+        v: ghostty_action_progress_report_s
+    ) -> Bool {
+        guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
+        guard let surface = target.target.surface else { return false }
+        guard let view = surfaceView(from: surface) else { return false }
+
+        let progress: PaneProgress?
+        switch v.state {
+        case GHOSTTY_PROGRESS_STATE_REMOVE:
+            progress = nil
+        case GHOSTTY_PROGRESS_STATE_SET:
+            let value = v.progress >= 0 ? Double(v.progress) / 100.0 : nil
+            progress = PaneProgress(state: .normal, value: value)
+        case GHOSTTY_PROGRESS_STATE_ERROR:
+            let value = v.progress >= 0 ? Double(v.progress) / 100.0 : nil
+            progress = PaneProgress(state: .error, value: value)
+        case GHOSTTY_PROGRESS_STATE_INDETERMINATE:
+            progress = PaneProgress(state: .indeterminate, value: nil)
+        case GHOSTTY_PROGRESS_STATE_PAUSE:
+            let value = v.progress >= 0 ? Double(v.progress) / 100.0 : nil
+            progress = PaneProgress(state: .paused, value: value)
+        default:
+            progress = nil
+        }
+
+        DispatchQueue.main.async {
+            view.terminal.updateProgressReport(progress)
         }
         return true
     }
@@ -310,6 +377,19 @@ class GhosttyAppManager: ObservableObject {
             )
         }
         return Color(white: 0.1)
+    }
+
+    private static func readForegroundColor(from config: ghostty_config_t) -> Color {
+        var color = ghostty_config_color_s(r: 0, g: 0, b: 0)
+        let key = "foreground"
+        if ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
+            return Color(
+                red: Double(color.r) / 255,
+                green: Double(color.g) / 255,
+                blue: Double(color.b) / 255
+            )
+        }
+        return Color(white: 0.9)
     }
 
     private static func readHighlightColor(from config: ghostty_config_t) -> Color {
@@ -523,4 +603,5 @@ class GhosttyAppManager: ObservableObject {
 
 extension Notification.Name {
     static let ghosttySurfaceClosed = Notification.Name("ghosttySurfaceClosed")
+    static let browserPaneClosed = Notification.Name("browserPaneClosed")
 }

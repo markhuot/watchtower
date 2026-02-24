@@ -5,7 +5,7 @@ struct WatchtowerApp: App {
     // Initialize Ghostty at app launch
     @StateObject private var ghosttyManager = GhosttyAppManager.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @FocusedValue(\.terminalViewModel) var activeViewModel
+    @FocusedValue(\.paneViewModel) var activeViewModel
 
     var body: some Scene {
         WindowGroup {
@@ -16,9 +16,19 @@ struct WatchtowerApp: App {
         .commands {
             CommandGroup(after: .newItem) {
                 Button("New Terminal") {
-                    activeViewModel?.addTerminal()
+                    if let vm = activeViewModel {
+                        let terminal = vm.addTerminal()
+                        vm.focusPane(terminal)
+                    }
                 }
                 .keyboardShortcut("t", modifiers: [.command])
+
+                Button("New Browser") {
+                    if let vm = activeViewModel {
+                        let browser = vm.addBrowser()
+                        vm.focusPane(browser)
+                    }
+                }
             }
 
             CommandGroup(after: .toolbar) {
@@ -57,9 +67,63 @@ struct WatchtowerApp: App {
                     activeViewModel?.toggleFocusMode()
                 }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
+
+                Divider()
+
+                // Browser navigation commands — disabled when focused pane is not a browser
+                let isBrowserFocused = activeViewModel?.contextualPane is BrowserPaneModel
+
+                Button("Go Back") {
+                    if let browser = activeViewModel?.contextualPane as? BrowserPaneModel,
+                       let window = NSApp.keyWindow,
+                       let contentView = window.contentView,
+                       let webView = findWebView(for: browser.id, in: contentView) {
+                        webView.goBack()
+                    }
+                }
+                .keyboardShortcut("[", modifiers: [.command])
+                .disabled(!isBrowserFocused)
+
+                Button("Go Forward") {
+                    if let browser = activeViewModel?.contextualPane as? BrowserPaneModel,
+                       let window = NSApp.keyWindow,
+                       let contentView = window.contentView,
+                       let webView = findWebView(for: browser.id, in: contentView) {
+                        webView.goForward()
+                    }
+                }
+                .keyboardShortcut("]", modifiers: [.command])
+                .disabled(!isBrowserFocused)
+
+                Button("Reload Page") {
+                    if let browser = activeViewModel?.contextualPane as? BrowserPaneModel,
+                       let window = NSApp.keyWindow,
+                       let contentView = window.contentView,
+                       let webView = findWebView(for: browser.id, in: contentView) {
+                        webView.reload()
+                    }
+                }
+                .keyboardShortcut("r", modifiers: [.command])
+                .disabled(!isBrowserFocused)
             }
         }
     }
+}
+
+import WebKit
+
+/// Walk the view hierarchy to find a WatchtowerWebView associated with a pane ID.
+func findWebView(for paneId: UUID, in view: NSView) -> WatchtowerWebView? {
+    if let webView = view as? WatchtowerWebView,
+       webView.browser?.id == paneId {
+        return webView
+    }
+    for subview in view.subviews {
+        if let found = findWebView(for: paneId, in: subview) {
+            return found
+        }
+    }
+    return nil
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -170,14 +234,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - FocusedValues
 
-/// Key for routing menu commands to the active window's TerminalContainerViewModel.
-struct FocusedTerminalViewModelKey: FocusedValueKey {
-    typealias Value = TerminalContainerViewModel
+/// Key for routing menu commands to the active window's PaneContainerViewModel.
+struct FocusedPaneViewModelKey: FocusedValueKey {
+    typealias Value = PaneContainerViewModel
 }
 
 extension FocusedValues {
-    var terminalViewModel: TerminalContainerViewModel? {
-        get { self[FocusedTerminalViewModelKey.self] }
-        set { self[FocusedTerminalViewModelKey.self] = newValue }
+    var paneViewModel: PaneContainerViewModel? {
+        get { self[FocusedPaneViewModelKey.self] }
+        set { self[FocusedPaneViewModelKey.self] = newValue }
     }
 }

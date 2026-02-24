@@ -90,11 +90,11 @@ extension NSEvent {
 
 /// SwiftUI wrapper for the Ghostty terminal view
 struct GhosttyTerminalView: NSViewRepresentable {
-    let terminal: TerminalModel
+    let terminal: TerminalPaneModel
     let size: CGSize
 
     func makeNSView(context: Context) -> GhosttyTerminalNSView {
-        let view = GhosttyTerminalNSView(terminal: terminal)
+        let view = GhosttyTerminalNSView(model: terminal)
         return view
     }
 
@@ -118,7 +118,7 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     )
 
     // The terminal model this view represents
-    private(set) var terminal: TerminalModel
+    private(set) var terminal: TerminalPaneModel
 
     // The Ghostty surface for this terminal
     private(set) var surface: ghostty_surface_t? = nil
@@ -141,8 +141,8 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     // Debounce timer for size updates to reduce jitter during live resize
     private var sizeDebounceWorkItem: DispatchWorkItem? = nil
 
-    init(terminal: TerminalModel) {
-        self.terminal = terminal
+    init(model: TerminalPaneModel) {
+        self.terminal = model
         super.init(frame: NSMakeRect(0, 0, 800, 600))
         setupView()
     }
@@ -207,7 +207,7 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         }
 
         // Set working directory and optional command/env, then create surface
-        terminal.directory.withCString { cDir in
+        terminal.terminalDirectory.withCString { cDir in
             surfaceConfig.working_directory = cDir
 
             envVarStructs.withUnsafeMutableBufferPointer { buf in
@@ -250,11 +250,11 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     // MARK: - Public API
 
     func updateTitle(_ title: String) {
-        terminal.title = title
+        terminal.terminalTitle = title
     }
 
-    func updateStatus(_ status: TerminalStatus) {
-        terminal.status = status
+    func updateStatus(_ status: PaneStatus) {
+        terminal.terminalStatus = status
     }
 
     /// Query Ghostty's own surface state to determine whether the surface
@@ -264,10 +264,10 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     func refreshStatusFromSurface() {
         guard let surface = surface else { return }
         let needsConfirm = ghostty_surface_needs_confirm_quit(surface)
-        terminal.status = needsConfirm ? .active : .idle
+        terminal.terminalStatus = needsConfirm ? .active : .idle
     }
 
-    func updateTerminal(_ terminal: TerminalModel) {
+    func updateTerminal(_ terminal: TerminalPaneModel) {
         self.terminal = terminal
     }
 
@@ -396,6 +396,14 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
             if let screen = window.screen {
                 let scale = screen.backingScaleFactor
                 ghostty_surface_set_content_scale(surface, Double(scale), Double(scale))
+            }
+
+            // Claim focus if this view was pending
+            if let pending = terminal.viewModel?.pendingFocus,
+               pending.paneId == terminal.id,
+               pending.fulfill() {
+                terminal.viewModel?.pendingFocus = nil
+                window.makeFirstResponder(self)
             }
         }
     }
