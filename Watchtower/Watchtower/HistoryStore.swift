@@ -78,6 +78,13 @@ class HistoryStore {
             print("[HistoryStore] Failed to open database: \(errmsg)")
             db = nil
         }
+
+        // Enable WAL mode so main-thread reads don't block on background writes
+        // (and vice versa). This is safe to call every launch; SQLite persists
+        // the journal mode in the database file.
+        if db != nil {
+            try? execute("PRAGMA journal_mode=WAL")
+        }
     }
 
     /// Check the stored schema version and drop all tables if it's outdated.

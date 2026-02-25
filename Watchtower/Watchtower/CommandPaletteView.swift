@@ -157,6 +157,10 @@ struct CommandPaletteView: View {
 
     @State private var filterText: String = ""
     @State private var selectedIndex: Int = 0
+    /// Asynchronously computed filter results. Updated by a debounced background task.
+    @State private var computedFilteredItems: [FilteredPaletteItem] = []
+    /// The filter task handle, cancelled and replaced on each keystroke.
+    @State private var filterTask: Task<Void, Never>?
 
     private let maxVisibleItems = 10
     private let cornerRadius: CGFloat = 8
@@ -208,6 +212,9 @@ struct CommandPaletteView: View {
         })
         items.append(.builtIn(name: "Move Pane Right", shortcut: "\u{2318}\u{2325}]") { vm in
             vm.movePaneRight()
+        })
+        items.append(.builtIn(name: "Fit Panes to Window") { vm in
+            vm.fitPanesToWindow()
         })
 
         // Browser-specific commands (only when browser pane is focused)
@@ -275,144 +282,174 @@ struct CommandPaletteView: View {
         return items
     }
 
-    /// Filter and score items against the current query.
-    private var filteredItems: [FilteredPaletteItem] {
+    /// Kick off an async filter computation. Debounces by cancelling any
+    /// in-flight task; the SQLite query and fuzzy matching run off the main
+    /// thread so the UI stays responsive during rapid typing.
+    private func scheduleFilter() {
+        filterTask?.cancel()
+
+        let currentFilter = filterText
         let items = allItems
 
-        if filterText.isEmpty {
-            return items.enumerated().map { (index, item) in
+        // Empty query — synchronous, no work to offload
+        if currentFilter.isEmpty {
+            computedFilteredItems = items.enumerated().map { (index, item) in
                 FilteredPaletteItem(
                     id: item.id,
                     item: item,
                     nameMatch: nil,
                     descriptionMatch: nil,
-                    score: items.count - index  // preserve original order
+                    score: items.count - index
                 )
             }
+            return
         }
 
-        // Fuzzy-match regular items
-        var results: [FilteredPaletteItem] = []
-        for item in items {
-            let nameMatch = fuzzyMatch(query: filterText, candidate: item.displayName)
-            let descMatch: FuzzyMatchResult?
-            if let desc = item.description {
-                descMatch = fuzzyMatch(query: filterText, candidate: desc)
-            } else {
-                descMatch = nil
-            }
+        filterTask = Task.detached(priority: .userInitiated) {
+            // Debounce: wait 50ms so rapid keystrokes don't each trigger
+            // a full filter pass. If the task is cancelled (next keystroke
+            // arrived), we bail out before doing any real work.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            if Task.isCancelled { return }
 
-            if nameMatch != nil || descMatch != nil {
-                // Name matches rank higher than description-only matches
-                let score = nameMatch?.score ?? ((descMatch?.score ?? 0) - 100)
-                results.append(FilteredPaletteItem(
-                    id: item.id,
-                    item: item,
-                    nameMatch: nameMatch,
-                    descriptionMatch: descMatch,
-                    score: score
-                ))
-            }
-        }
+            // --- Heavy work (off main thread) ---
 
-        // Fuzzy-match history entries (only when query is non-empty)
-        let historyEntries = HistoryStore.shared.search(query: filterText, limit: 20)
-        for entry in historyEntries {
-            let displayURL = entry.urlWithoutScheme
-            let urlMatch = fuzzyMatch(query: filterText, candidate: displayURL)
-            let titleMatch: FuzzyMatchResult?
-            if let title = entry.title {
-                titleMatch = fuzzyMatch(query: filterText, candidate: title)
-            } else {
-                titleMatch = nil
-            }
-
-            if urlMatch != nil || titleMatch != nil {
-                let item = CommandPaletteItem.fromHistory(entry)
-                // URL matches rank higher than title-only matches
-                var score = urlMatch?.score ?? ((titleMatch?.score ?? 0) - 100)
-                // Add tiebreaker bonuses for recency and visit count
-                score += HistoryStore.tiebreakerBonus(
-                    lastVisitedAt: entry.lastVisitedAt,
-                    visitCount: entry.visitCount
-                )
-                results.append(FilteredPaletteItem(
-                    id: item.id,
-                    item: item,
-                    nameMatch: urlMatch,
-                    descriptionMatch: titleMatch,
-                    score: score
-                ))
-            }
-        }
-
-        // Sort by score descending
-        results.sort { $0.score > $1.score }
-
-        // Add query action items (Go to URL, Search the web) — always shown
-        // when query is non-empty, exempt from fuzzy matching
-        let queryText = filterText.trimmingCharacters(in: .whitespaces)
-        if !queryText.isEmpty {
-            let urlLike = isURLLike(queryText)
-
-            let goToURL = CommandPaletteItem.queryAction(
-                name: "Go to URL"
-            ) { vm, forceNewPane in
-                guard let url = normalizeURL(queryText) else { return }
-                if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
-                    browser.navigationSource = "address"
-                    browser.navigate(to: url)
+            // Fuzzy-match built-in commands & actions
+            var results: [FilteredPaletteItem] = []
+            for item in items {
+                if Task.isCancelled { return }
+                let nameMatch = fuzzyMatch(query: currentFilter, candidate: item.displayName)
+                let descMatch: FuzzyMatchResult?
+                if let desc = item.description {
+                    descMatch = fuzzyMatch(query: currentFilter, candidate: desc)
                 } else {
-                    let browser = vm.addBrowser(url: url)
-                    browser.navigationSource = "address"
-                    vm.focusPane(browser)
+                    descMatch = nil
+                }
+
+                if nameMatch != nil || descMatch != nil {
+                    let score = nameMatch?.score ?? ((descMatch?.score ?? 0) - 100)
+                    results.append(FilteredPaletteItem(
+                        id: item.id,
+                        item: item,
+                        nameMatch: nameMatch,
+                        descriptionMatch: descMatch,
+                        score: score
+                    ))
                 }
             }
 
-            let searchWeb = CommandPaletteItem.queryAction(
-                name: "Search the web"
-            ) { vm, forceNewPane in
-                let encoded = queryText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? queryText
-                guard let url = URL(string: "https://duckduckgo.com/?q=\(encoded)") else { return }
-                if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
-                    browser.navigate(to: url)
+            // Fuzzy-match history entries
+            let historyEntries = HistoryStore.shared.search(query: currentFilter, limit: 20)
+            for entry in historyEntries {
+                if Task.isCancelled { return }
+                let displayURL = entry.urlWithoutScheme
+                let urlMatch = fuzzyMatch(query: currentFilter, candidate: displayURL)
+                let titleMatch: FuzzyMatchResult?
+                if let title = entry.title {
+                    titleMatch = fuzzyMatch(query: currentFilter, candidate: title)
                 } else {
-                    let browser = vm.addBrowser(url: url)
-                    vm.focusPane(browser)
+                    titleMatch = nil
+                }
+
+                if urlMatch != nil || titleMatch != nil {
+                    let item = CommandPaletteItem.fromHistory(entry)
+                    var score = urlMatch?.score ?? ((titleMatch?.score ?? 0) - 100)
+                    score += HistoryStore.tiebreakerBonus(
+                        lastVisitedAt: entry.lastVisitedAt,
+                        visitCount: entry.visitCount
+                    )
+                    results.append(FilteredPaletteItem(
+                        id: item.id,
+                        item: item,
+                        nameMatch: urlMatch,
+                        descriptionMatch: titleMatch,
+                        score: score
+                    ))
                 }
             }
 
-            // URL-like queries: Go to URL first; non-URL: Search first
-            let firstAction = urlLike ? goToURL : searchWeb
-            let secondAction = urlLike ? searchWeb : goToURL
+            if Task.isCancelled { return }
 
-            results.append(FilteredPaletteItem(
-                id: firstAction.id,
-                item: firstAction,
-                nameMatch: nil,
-                descriptionMatch: nil,
-                score: -1000  // below fuzzy matches
-            ))
-            results.append(FilteredPaletteItem(
-                id: secondAction.id,
-                item: secondAction,
-                nameMatch: nil,
-                descriptionMatch: nil,
-                score: -1001  // below first query action
-            ))
+            // Sort
+            results.sort {
+                if $0.score != $1.score { return $0.score > $1.score }
+                return $0.item.displayName.count < $1.item.displayName.count
+            }
+
+            // Append query actions (Go to URL / Search the web)
+            let queryText = currentFilter.trimmingCharacters(in: .whitespaces)
+            if !queryText.isEmpty {
+                let urlLike = isURLLike(queryText)
+
+                let goToURL = CommandPaletteItem.queryAction(
+                    name: "Go to URL"
+                ) { vm, forceNewPane in
+                    guard let url = normalizeURL(queryText) else { return }
+                    if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
+                        browser.navigationSource = "address"
+                        browser.navigate(to: url)
+                    } else {
+                        let browser = vm.addBrowser(url: url)
+                        browser.navigationSource = "address"
+                        vm.focusPane(browser)
+                    }
+                }
+
+                let searchWeb = CommandPaletteItem.queryAction(
+                    name: "Search the web"
+                ) { vm, forceNewPane in
+                    let encoded = queryText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? queryText
+                    guard let url = URL(string: "https://duckduckgo.com/?q=\(encoded)") else { return }
+                    if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
+                        browser.navigate(to: url)
+                    } else {
+                        let browser = vm.addBrowser(url: url)
+                        vm.focusPane(browser)
+                    }
+                }
+
+                let firstAction = urlLike ? goToURL : searchWeb
+                let secondAction = urlLike ? searchWeb : goToURL
+
+                results.append(FilteredPaletteItem(
+                    id: firstAction.id,
+                    item: firstAction,
+                    nameMatch: nil,
+                    descriptionMatch: nil,
+                    score: -1000
+                ))
+                results.append(FilteredPaletteItem(
+                    id: secondAction.id,
+                    item: secondAction,
+                    nameMatch: nil,
+                    descriptionMatch: nil,
+                    score: -1001
+                ))
+            }
+
+            if Task.isCancelled { return }
+
+            // --- Publish results on main thread ---
+            let finalResults = results
+            await MainActor.run {
+                computedFilteredItems = finalResults
+            }
         }
-
-        return results
     }
 
-    /// The visible items (capped at maxVisibleItems).
+    /// The visible items (capped at maxVisibleItems for regular items, with
+    /// query actions always appended so "Go to URL" and "Search the web" are
+    /// always reachable).
     private var visibleItems: [FilteredPaletteItem] {
-        Array(filteredItems.prefix(maxVisibleItems))
+        let regular = computedFilteredItems.filter { !$0.item.isQueryAction }
+        let queryActions = computedFilteredItems.filter { $0.item.isQueryAction }
+        return Array(regular.prefix(maxVisibleItems)) + queryActions
     }
 
-    /// Whether there are more items than what's shown.
+    /// Whether there are more regular (non-query-action) items than what's shown.
     private var hasMore: Bool {
-        filteredItems.count > maxVisibleItems
+        let regularCount = computedFilteredItems.filter { !$0.item.isQueryAction }.count
+        return regularCount > maxVisibleItems
     }
 
     /// Index of the first query action in visibleItems, for separator drawing.
@@ -433,7 +470,7 @@ struct CommandPaletteView: View {
                 onSubmit: { forceNewPane in executeSelected(forceNewPane: forceNewPane) },
                 onEscape: { viewModel.dismissCommandPalette() }
             )
-            .frame(height: 36)
+            .frame(minHeight: 36)
             .padding(.horizontal, 10)
             .padding(.top, 10)
             .padding(.bottom, 6)
@@ -502,10 +539,13 @@ struct CommandPaletteView: View {
             if let initial = viewModel.commandPaletteInitialText {
                 filterText = initial
             }
+            // Seed the initial results (synchronous for empty, async for pre-filled)
+            scheduleFilter()
         }
         .onChange(of: filterText) { _ in
-            // Reset selection when filter changes
+            // Reset selection and kick off a debounced filter pass
             selectedIndex = 0
+            scheduleFilter()
         }
     }
 
@@ -727,10 +767,11 @@ struct CommandPaletteRow: View {
     }
 }
 
-// MARK: - NSTextField Wrapper
+// MARK: - NSTextView Wrapper
 
-/// An NSViewRepresentable wrapping NSTextField for the command palette's
-/// search field, with direct first responder control and key event interception.
+/// An NSViewRepresentable wrapping NSTextView for the command palette's
+/// search field, with auto-growing height, direct first responder control,
+/// and key event interception.
 struct CommandPaletteTextField: NSViewRepresentable {
     @Binding var text: String
     var selectAllOnAppear: Bool = false
@@ -745,21 +786,28 @@ struct CommandPaletteTextField: NSViewRepresentable {
         Coordinator(self)
     }
 
-    func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
-        field.delegate = context.coordinator
-        field.placeholderString = "Filter commands\u{2026}"
-        field.font = .systemFont(ofSize: 14)
-        field.textColor = .white
-        field.backgroundColor = .clear
-        field.drawsBackground = false
-        field.isBordered = false
-        field.focusRingType = .none
-        field.cell?.sendsActionOnEndEditing = false
+    func makeNSView(context: Context) -> PaletteTextView {
+        let textView = PaletteTextView()
+        textView.delegate = context.coordinator
+        textView.font = .systemFont(ofSize: 14)
+        textView.textColor = .white
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.isFieldEditor = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainerInset = NSSize(width: 0, height: 2)
+        textView.allowsUndo = true
+
+        // Placeholder support is handled via the custom subclass
+        textView.placeholderString = "Filter commands\u{2026}"
 
         // Pre-fill text if provided (e.g. browser URL from Cmd+L)
         if !text.isEmpty {
-            field.stringValue = text
+            textView.string = text
         }
 
         // Become first responder once when the palette appears.
@@ -767,38 +815,40 @@ struct CommandPaletteTextField: NSViewRepresentable {
         // fires once — updateNSView runs during SwiftUI teardown and
         // would re-steal focus from the terminal after dismissal.
         DispatchQueue.main.async {
-            if let window = field.window {
-                window.makeFirstResponder(field)
+            if let window = textView.window {
+                window.makeFirstResponder(textView)
                 // Select all text so the user can type to replace or
                 // press arrow keys to edit (matches browser Cmd+L UX).
                 if self.selectAllOnAppear {
-                    field.selectText(nil)
+                    textView.selectAll(nil)
                 }
             }
         }
 
-        return field
+        return textView
     }
 
-    func updateNSView(_ nsView: NSTextField, context: Context) {
-        if nsView.stringValue != text {
-            nsView.stringValue = text
+    func updateNSView(_ nsView: PaletteTextView, context: Context) {
+        if nsView.string != text {
+            nsView.string = text
+            nsView.invalidateIntrinsicContentSize()
         }
     }
 
-    class Coordinator: NSObject, NSTextFieldDelegate {
+    class Coordinator: NSObject, NSTextViewDelegate {
         let parent: CommandPaletteTextField
 
         init(_ parent: CommandPaletteTextField) {
             self.parent = parent
         }
 
-        func controlTextDidChange(_ obj: Notification) {
-            guard let textField = obj.object as? NSTextField else { return }
-            parent.text = textField.stringValue
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
+            textView.invalidateIntrinsicContentSize()
         }
 
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             switch commandSelector {
             case #selector(NSResponder.moveUp(_:)):
                 parent.onArrowUp()
@@ -818,6 +868,11 @@ struct CommandPaletteTextField: NSViewRepresentable {
                 let cmdHeld = NSApp.currentEvent?.modifierFlags.contains(.command) ?? false
                 parent.onSubmit(cmdHeld)
                 return true
+            case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+                // Cmd+Return sends insertNewlineIgnoringFieldEditor instead of
+                // insertNewline — treat it as submit with forceNewPane.
+                parent.onSubmit(true)
+                return true
             case #selector(NSResponder.cancelOperation(_:)):
                 parent.onEscape()
                 return true
@@ -829,5 +884,57 @@ struct CommandPaletteTextField: NSViewRepresentable {
                 return false
             }
         }
+    }
+}
+
+// MARK: - Palette Text View (NSTextView subclass)
+
+/// Custom NSTextView subclass that provides intrinsic content size based on
+/// text layout (for auto-growing height) and placeholder text rendering.
+class PaletteTextView: NSTextView {
+    var placeholderString: String? = nil
+
+    override var intrinsicContentSize: NSSize {
+        guard let layoutManager = layoutManager,
+              let textContainer = textContainer else {
+            return super.intrinsicContentSize
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let insets = textContainerInset
+        let height = usedRect.height + insets.height * 2
+        // Minimum height of one line (~20pt) so the field never collapses
+        return NSSize(width: NSView.noIntrinsicMetric, height: max(height, 20))
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        invalidateIntrinsicContentSize()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        // Draw placeholder when empty
+        if string.isEmpty, let placeholder = placeholderString {
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.white.withAlphaComponent(0.4),
+                .font: font ?? NSFont.systemFont(ofSize: 14)
+            ]
+            let insets = textContainerInset
+            let padding = textContainer?.lineFragmentPadding ?? 0
+            let rect = NSRect(
+                x: insets.width + padding,
+                y: insets.height,
+                width: bounds.width - insets.width * 2 - padding * 2,
+                height: bounds.height - insets.height * 2
+            )
+            NSString(string: placeholder).draw(in: rect, withAttributes: attrs)
+        }
+    }
+
+    override var needsDisplay: Bool {
+        get { super.needsDisplay }
+        set { super.needsDisplay = newValue }
     }
 }

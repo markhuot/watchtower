@@ -43,4 +43,15 @@ extension NSView {
             scrollView.reflectScrolledClipView(clipView)
         }
     }
+
+    /// Returns `true` if this view itself, or any ancestor (superview),
+    /// is an instance of the given class (or a subclass of it).
+    func isOrHasAncestor<T: NSView>(ofType type: T.Type) -> Bool {
+        var current: NSView? = self
+        while let v = current {
+            if v is T { return true }
+            current = v.superview
+        }
+        return false
+    }
 }

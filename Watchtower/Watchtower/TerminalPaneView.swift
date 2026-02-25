@@ -12,6 +12,9 @@ struct PaneView: View {
     /// frontmost window shows the full-intensity focus highlight.
     @Environment(\.controlActiveState) private var controlActiveState
 
+    /// Called when the close button is clicked.
+    var onClose: (() -> Void)? = nil
+
     /// Called when a drag starts from this pane's title bar.
     var onDragStarted: (() -> Void)? = nil
 
@@ -68,15 +71,55 @@ struct PaneView: View {
             // Existing pane content (header + content area)
             VStack(spacing: 0) {
                 // Header — acts as drag handle with click-to-focus support
-                PaneHeaderView(pane: pane)
-                    .frame(height: 40)
-                    .overlay(
-                        DragSourceView(
-                            pane: pane,
-                            onDragStarted: onDragStarted,
-                            onClicked: onHeaderTapped
+                ZStack(alignment: .leading) {
+                    PaneHeaderView(pane: pane, onClose: onClose)
+                        .overlay(
+                            DragSourceView(
+                                pane: pane,
+                                onDragStarted: onDragStarted,
+                                onClicked: onHeaderTapped
+                            )
                         )
-                    )
+                    
+                    // Status circle sits above the drag overlay so hover/click works
+                    StatusCircle(status: pane.status, onClose: onClose)
+                        .padding(.leading, 12)
+
+                    // Back / Forward buttons for browser panes — above the drag
+                    // overlay so click events reach them.
+                    if let browser = pane as? BrowserPaneModel {
+                        HStack(spacing: 8) {
+                            Button(action: { browser.goBack() }) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(appManager.headerTextColor.opacity(browser.canGoBack ? 0.9 : 0.25))
+                            .disabled(!browser.canGoBack)
+                            .frame(width: 16, height: 16)
+
+                            Button(action: { browser.reloadOrStop() }) {
+                                Image(systemName: browser.isLoading ? "xmark" : "arrow.clockwise")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(appManager.headerTextColor.opacity(0.9))
+                            .frame(width: 16, height: 16)
+
+                            Button(action: { browser.goForward() }) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(appManager.headerTextColor.opacity(browser.canGoForward ? 0.9 : 0.25))
+                            .disabled(!browser.canGoForward)
+                            .frame(width: 16, height: 16)
+                        }
+                        // Position: 12px leading + 16px status circle + 8px gap
+                        .padding(.leading, 36)
+                    }
+                }
+                .frame(height: 44)
                 
                 // Content area — switches on pane type
                 if let terminal = pane as? TerminalPaneModel {
@@ -115,7 +158,7 @@ struct PaneView: View {
                 CommandPaletteView(viewModel: viewModel)
                     .frame(maxWidth: min(500, pane.paneWidth - 20))
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 50)  // 40px header + 10px gap
+                    .padding(.top, 54)  // 44px header + 10px gap
                     .transition(.opacity)
             }
         }
@@ -130,17 +173,30 @@ struct PaneView: View {
 struct PaneHeaderView: View {
     @ObservedObject var pane: PaneModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
+    var onClose: (() -> Void)? = nil
     
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                // Status indicator — glowing circle
-                StatusCircle(status: pane.status)
+                // Invisible spacer matching the status circle's interactive size.
+                // The actual StatusCircle is rendered above the drag overlay in PaneView
+                // so that hover/click events reach it.
+                Color.clear
+                    .frame(width: 16, height: 16)
                 
+                // Reserve space for back/reload/forward buttons on browser panes.
+                // The actual buttons are rendered above the drag overlay in PaneView
+                // so that click events reach them.
+                if pane is BrowserPaneModel {
+                    Color.clear.frame(width: 16, height: 16)
+                    Color.clear.frame(width: 16, height: 16)
+                    Color.clear.frame(width: 16, height: 16)
+                }
+
                 // Title (from terminal/browser)
                 Text(pane.title)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(appManager.headerTextColor.opacity(0.9))
                     .lineLimit(1)
                 
                 Spacer()
@@ -149,11 +205,12 @@ struct PaneHeaderView: View {
                 if let subtitle = pane.subtitle {
                     Text(subtitle)
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(appManager.headerTextColor.opacity(0.5))
                         .lineLimit(1)
                 }
             }
             .padding(.horizontal, 12)
+            .padding(.top, 4) // nudge content down to visually center (compensate for descender space)
             .frame(maxHeight: .infinity)
 
             // Progress bar — 4px bottom border
@@ -214,14 +271,39 @@ struct ProgressBarView: View {
 
 struct StatusCircle: View {
     let status: PaneStatus
-    
+    var onClose: (() -> Void)? = nil
+    @ObservedObject private var appManager = GhosttyAppManager.shared
+
+    @State private var isHovered = false
+
     var body: some View {
-        Circle()
-            .fill(statusColor)
-            .frame(width: 8, height: 8)
-            .shadow(color: statusColor.opacity(0.8), radius: 4, x: 0, y: 0)
+        ZStack {
+            if isHovered && onClose != nil {
+                // Close button on hover
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(appManager.headerTextColor.opacity(0.7))
+                    .frame(width: 16, height: 16)
+                    .background(appManager.headerTextColor.opacity(0.15))
+                    .clipShape(Circle())
+                    .onTapGesture {
+                        onClose?()
+                    }
+            } else {
+                // Normal status circle
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: statusColor.opacity(0.8), radius: 4, x: 0, y: 0)
+            }
+        }
+        .frame(width: 16, height: 16)
+        .contentShape(Circle())
+        .onHover { hovering in
+            isHovered = hovering
+        }
     }
-    
+
     private var statusColor: Color {
         switch status {
         case .active:
@@ -253,18 +335,19 @@ struct PaneView_Previews: PreviewProvider {
 /// Shows the status circle and the pane title in a compact pill.
 struct DragPreviewView: View {
     @ObservedObject var pane: PaneModel
+    @ObservedObject private var appManager = GhosttyAppManager.shared
 
     var body: some View {
         HStack(spacing: 8) {
             StatusCircle(status: pane.status)
             Text(pane.title)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.9))
+                .foregroundColor(appManager.headerTextColor.opacity(0.9))
                 .lineLimit(1)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(white: 0.15))
+        .background(appManager.backgroundColor.opacity(0.9))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }

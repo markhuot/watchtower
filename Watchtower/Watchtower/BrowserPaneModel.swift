@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WebKit
 
 class BrowserPaneModel: PaneModel {
     @Published var url: URL
@@ -10,6 +11,10 @@ class BrowserPaneModel: PaneModel {
     @Published var estimatedProgress: Double = 0.0
     @Published var httpStatusCode: Int? = nil
     @Published var hasInteractedForms: Bool = false
+
+    /// Weak reference to the underlying WKWebView, set by BrowserWebView.makeNSView.
+    /// Used by the header back/forward buttons to trigger navigation directly.
+    weak var webView: WKWebView?
 
     /// How the current navigation was initiated. Set before navigating,
     /// consumed and reset to "navigation" after the visit is recorded.
@@ -62,5 +67,24 @@ class BrowserPaneModel: PaneModel {
     func navigate(to newURL: URL) {
         url = newURL
         navigationGeneration += 1
+    }
+
+    /// Navigate back in the web view's history.
+    func goBack() {
+        webView?.goBack()
+    }
+
+    /// Navigate forward in the web view's history.
+    func goForward() {
+        webView?.goForward()
+    }
+
+    /// Reload the current page, or stop loading if a load is in progress.
+    func reloadOrStop() {
+        if isLoading {
+            webView?.stopLoading()
+        } else {
+            webView?.reload()
+        }
     }
 }

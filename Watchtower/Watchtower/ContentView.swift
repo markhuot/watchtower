@@ -112,8 +112,7 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "plus")
                 } primaryAction: {
-                    let terminal = viewModel.addTerminal()
-                    viewModel.focusPane(terminal)
+                    viewModel.addContextualPane()
                 }
             }
         }
@@ -254,7 +253,9 @@ struct PaneWithHandle: View {
                 DropIndicatorView(isActive: showLeftIndicator, targetSlot: 0, viewModel: viewModel)
             }
 
-            PaneView(pane: pane, viewModel: viewModel, onDragStarted: {
+            PaneView(pane: pane, viewModel: viewModel, onClose: {
+                    viewModel.removePane(byId: pane.id)
+                }, onDragStarted: {
                     viewModel.dragStarted(paneId: pane.id)
                 }, onHeaderTapped: {
                     viewModel.focusPane(id: pane.id)
@@ -275,15 +276,12 @@ struct PaneWithHandle: View {
                 DropIndicatorView(isActive: showRightIndicator, targetSlot: index + 1, viewModel: viewModel)
 
                 // Resize handle: invisible but covers the full gap for hit testing.
+                // macOS 15+ uses pointerStyle (system-level cursor API that
+                // can't be overridden by WKWebView's cursor management).
+                // Older macOS falls back to onHover + NSCursor push/pop.
                 Color.clear
                     .contentShape(Rectangle())
-                    .onHover { hovering in
-                        if hovering {
-                            NSCursor.resizeLeftRight.push()
-                        } else {
-                            NSCursor.pop()
-                        }
-                    }
+                    .modifier(ResizeCursorModifier())
                     .gesture(
                         DragGesture(minimumDistance: 1, coordinateSpace: .global)
                             .onChanged { value in
@@ -318,6 +316,30 @@ struct PaneWithHandle: View {
                     )
             }
             .frame(width: 27) // 3px indicator + 12px padding each side
+        }
+    }
+}
+
+// MARK: - Resize Cursor Modifier
+
+/// Sets the east-west resize cursor on the view.
+/// On macOS 15+ uses the system `pointerStyle` API which integrates at
+/// the window-server level and can't be overridden by WKWebView's cursor
+/// management. On older macOS falls back to `onHover` + `NSCursor.push/pop`.
+struct ResizeCursorModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content
+                .pointerStyle(.frameResize(position: .trailing))
+        } else {
+            content
+                .onHover { hovering in
+                    if hovering {
+                        NSCursor.resizeLeftRight.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
         }
     }
 }
@@ -536,6 +558,14 @@ class PaneContainerViewModel: ObservableObject {
     /// Event monitor for detecting when a drag session ends (mouse up).
     private var dragEndMonitor: Any? = nil
 
+    /// Event monitor that forwards horizontal scroll events from browser
+    /// panes to the parent horizontal ScrollView. WKWebView captures all
+    /// scroll events (breaking pane-to-pane scrolling), so we use a local
+    /// event monitor to programmatically scroll the parent when we see
+    /// horizontal delta over a browser pane. The monitor does NOT consume
+    /// the event — WKWebView still sees it for vertical scrolling.
+    private var browserScrollMonitor: Any? = nil
+
     /// Subject that emits the currently focused pane. Used to drive
     /// the `switchToLatest` pipeline that tracks the focused pane's
     /// directory for git detection and action discovery.
@@ -598,12 +628,100 @@ class PaneContainerViewModel: ObservableObject {
         // Start with one terminal
         let initial = addTerminal()
         focusPane(initial)
+
+        // Install a local event monitor that watches scroll wheel events.
+        // When the mouse is over a WKWebView (browser pane), WKWebView
+        // captures all scroll events — the horizontal component never
+        // reaches the parent horizontal ScrollView that manages
+        // pane-to-pane scrolling. This monitor detects that situation and
+        // programmatically scrolls the parent NSScrollView.
+        browserScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            self?.handleBrowserHorizontalScroll(event)
+            return event  // always pass through — don't break WKWebView's vertical scrolling
+        }
     }
 
     deinit {
         if let monitor = dragEndMonitor {
             NSEvent.removeMonitor(monitor)
         }
+        if let monitor = browserScrollMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    // MARK: - Browser horizontal scroll forwarding
+
+    /// Called by the local scroll-wheel event monitor. Detects when the
+    /// mouse is over a WKWebView and programmatically scrolls the parent
+    /// horizontal NSScrollView by the event's horizontal delta.
+    ///
+    /// WKWebView captures all scroll events internally, so horizontal
+    /// trackpad gestures never reach the parent ScrollView. This method
+    /// reads the horizontal delta from each event and applies it to the
+    /// parent's clip view, giving the user pane-to-pane scrolling even
+    /// when the mouse is over a browser pane. The event itself is NOT
+    /// consumed — WKWebView still receives it for vertical scrolling.
+    private func handleBrowserHorizontalScroll(_ event: NSEvent) {
+        // Only care about events with a horizontal component.
+        guard event.scrollingDeltaX != 0 else { return }
+
+        // Determine the window and the view under the mouse.
+        guard let window = event.window else { return }
+        let locationInWindow = event.locationInWindow
+        guard let hitView = window.contentView?.hitTest(locationInWindow) else { return }
+
+        // Check if the hit view is (or is inside) a WKWebView. If not, the
+        // parent horizontal ScrollView handles scrolling natively.
+        guard hitView.isOrHasAncestor(ofType: WKWebView.self) else { return }
+
+        // Find the parent horizontal NSScrollView (the one backing
+        // SwiftUI's ScrollView(.horizontal)).
+        guard let parentScrollView = findHorizontalScrollView(from: hitView) else { return }
+
+        let clipView = parentScrollView.contentView
+        guard let documentView = parentScrollView.documentView else { return }
+
+        var dx = event.scrollingDeltaX
+        if event.hasPreciseScrollingDeltas {
+            // Trackpad: delta is already in points. Negate because positive
+            // deltaX = "scroll content left" but we need to increase origin.x.
+            dx = -dx
+        } else {
+            // Mouse wheel: delta is in "lines", scale up.
+            dx = -dx * 10
+        }
+
+        var newOrigin = clipView.bounds.origin
+        newOrigin.x += dx
+
+        // Clamp to valid range.
+        let maxScrollX = max(0, documentView.frame.width - clipView.bounds.width)
+        newOrigin.x = min(max(0, newOrigin.x), maxScrollX)
+
+        clipView.setBoundsOrigin(newOrigin)
+        parentScrollView.reflectScrolledClipView(clipView)
+    }
+
+    /// Walk up the view hierarchy from `view` to find the horizontal
+    /// NSScrollView that backs SwiftUI's `ScrollView(.horizontal)`.
+    /// Skips any NSScrollView that belongs to WKWebView's internals.
+    private func findHorizontalScrollView(from view: NSView) -> NSScrollView? {
+        var current: NSView? = view
+        while let v = current {
+            if let sv = v as? NSScrollView {
+                // WKWebView contains internal NSScrollViews — skip those.
+                // The parent horizontal scroll view is the one whose
+                // hasHorizontalScroller is true or whose documentView
+                // is wider than the clip view (SwiftUI sets this up).
+                let isWebKitInternal = sv.isOrHasAncestor(ofType: WKWebView.self)
+                if !isWebKitInternal {
+                    return sv
+                }
+            }
+            current = v.superview
+        }
+        return nil
     }
 
     /// Call when a drag session begins to install cleanup monitoring.
@@ -833,6 +951,19 @@ class PaneContainerViewModel: ObservableObject {
         return browser
     }
 
+    /// Create a new pane matching the type of the currently focused pane.
+    /// If a browser is focused a new browser is created; otherwise a new
+    /// terminal is created. The new pane is automatically focused.
+    func addContextualPane() {
+        if contextualPane is BrowserPaneModel {
+            let browser = addBrowser()
+            focusPane(browser)
+        } else {
+            let terminal = addTerminal()
+            focusPane(terminal)
+        }
+    }
+
     /// Move a pane from its current position to a new slot index.
     /// `toSlot` is in pre-removal coordinates (0 = before first, count = after last).
     func movePane(id: UUID, toSlot slot: Int) {
@@ -910,6 +1041,29 @@ class PaneContainerViewModel: ObservableObject {
         guard destIndex != currentIndex else { return }
         panes.swapAt(currentIndex, destIndex)
         focusPane(pane)
+    }
+
+    /// Resize all panes so they fit side-by-side within the window width.
+    /// Accounts for outer padding, drop indicators, and inter-pane gaps.
+    func fitPanesToWindow() {
+        guard !panes.isEmpty else { return }
+        guard let window = NSApp.keyWindow,
+              let contentView = window.contentView else { return }
+
+        let windowWidth = contentView.frame.width
+
+        // Layout budget:
+        //   outer padding: 10 left + 10 right = 20
+        //   first-pane left drop indicator: 27
+        //   each pane's right gap (resize handle): 27 × paneCount
+        let paneCount = CGFloat(panes.count)
+        let chrome: CGFloat = 20 + 27 + 27 * paneCount
+        let available = windowWidth - chrome
+        let perPane = max(200, available / paneCount)  // respect minimum width
+
+        for pane in panes {
+            pane.paneWidth = perPane
+        }
     }
 
     /// Swap the focused pane one position to the right (wrapping around).

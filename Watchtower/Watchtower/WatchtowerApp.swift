@@ -17,15 +17,7 @@ struct WatchtowerApp: App {
             CommandGroup(after: .newItem) {
                 // Context-aware: duplicates the type of the currently focused pane
                 Button("New Pane") {
-                    if let vm = activeViewModel {
-                        if vm.contextualPane is BrowserPaneModel {
-                            let browser = vm.addBrowser()
-                            vm.focusPane(browser)
-                        } else {
-                            let terminal = vm.addTerminal()
-                            vm.focusPane(terminal)
-                        }
-                    }
+                    activeViewModel?.addContextualPane()
                 }
                 .keyboardShortcut("t", modifiers: [.command])
 
@@ -88,6 +80,10 @@ struct WatchtowerApp: App {
                     activeViewModel?.toggleFocusMode()
                 }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
+
+                Button("Fit Panes to Window") {
+                    activeViewModel?.fitPanesToWindow()
+                }
 
                 Divider()
 
@@ -213,6 +209,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // so the titlebar blends seamlessly
         let bgColor = GhosttyAppManager.shared.backgroundColor
         window.backgroundColor = NSColor(bgColor)
+    }
+
+    // MARK: - Dock Menu
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        let newWindowItem = NSMenuItem(
+            title: "New Window",
+            action: #selector(newWindowFromDock(_:)),
+            keyEquivalent: ""
+        )
+        newWindowItem.target = self
+        menu.addItem(newWindowItem)
+        return menu
+    }
+
+    @objc func newWindowFromDock(_ sender: Any?) {
+        // Triggers SwiftUI's WindowGroup to open a new window,
+        // equivalent to File > New Window (Cmd+N).
+        NSApp.sendAction(#selector(NSWindow.newWindowForTab(_:)), to: nil, from: nil)
     }
 
     // MARK: - App Quit Confirmation

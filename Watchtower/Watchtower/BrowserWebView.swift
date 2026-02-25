@@ -148,86 +148,6 @@ class WatchtowerWebView: WKWebView {
         return super.performKeyEquivalent(with: event)
     }
 
-    // MARK: - Horizontal scroll forwarding
-
-    /// Override scrollWheel so that horizontal trackpad gestures scroll the
-    /// Watchtower pane strip (the parent horizontal ScrollView) instead of
-    /// being silently consumed by the web content.
-    ///
-    /// Strategy:
-    ///  - If the web page can scroll horizontally in the direction of the
-    ///    swipe, let WKWebView handle it (the user is scrolling a wide page).
-    ///  - Otherwise, forward the event up the responder chain so the parent
-    ///    horizontal ScrollView moves between panes.
-    ///  - Vertical scrolling always goes to WKWebView (normal web page
-    ///    scrolling).
-    override func scrollWheel(with event: NSEvent) {
-        let dx = event.scrollingDeltaX
-
-        // Pure vertical scroll or zero horizontal delta — let WKWebView
-        // handle it entirely.
-        if dx == 0 {
-            super.scrollWheel(with: event)
-            return
-        }
-
-        // Check whether the web content has horizontal overflow by walking
-        // the view hierarchy for the internal NSScrollView that WKWebView
-        // uses. This is synchronous and avoids async JS evaluation.
-        if let innerScrollView = findEnclosedScrollView() {
-            let documentView = innerScrollView.documentView ?? innerScrollView
-            let contentWidth = documentView.frame.width
-            let visibleWidth = innerScrollView.contentView.bounds.width
-            let scrollX = innerScrollView.contentView.bounds.origin.x
-            let hasHorizontalOverflow = contentWidth > visibleWidth + 1 // 1px tolerance
-
-            if hasHorizontalOverflow {
-                // Page has horizontal overflow — check if we're at a
-                // boundary in the direction of the swipe.
-                let atLeftEdge = scrollX <= 0.5
-                let atRightEdge = scrollX >= (contentWidth - visibleWidth - 0.5)
-
-                // Positive deltaX = swiping right (content moves left, i.e.
-                // user wants to scroll towards the start). Negative deltaX =
-                // swiping left (content moves right, towards the end).
-                let swipingTowardStart = dx > 0
-                let swipingTowardEnd = dx < 0
-
-                let atBoundary = (swipingTowardStart && atLeftEdge) || (swipingTowardEnd && atRightEdge)
-
-                if !atBoundary {
-                    // Web page can still scroll in this direction — let
-                    // WKWebView consume the event.
-                    super.scrollWheel(with: event)
-                    return
-                }
-            }
-        }
-
-        // The web page either has no horizontal overflow or is at a scroll
-        // boundary in the swipe direction. Forward to the parent so the
-        // pane strip scrolls.
-        self.nextResponder?.scrollWheel(with: event)
-    }
-
-    /// Walk the subview tree to find the internal NSScrollView that
-    /// WKWebView uses for its web content.
-    private func findEnclosedScrollView() -> NSScrollView? {
-        return findScrollViewInSubviews(of: self)
-    }
-
-    private func findScrollViewInSubviews(of view: NSView) -> NSScrollView? {
-        for subview in view.subviews {
-            if let scrollView = subview as? NSScrollView {
-                return scrollView
-            }
-            if let found = findScrollViewInSubviews(of: subview) {
-                return found
-            }
-        }
-        return nil
-    }
-
     /// Intercept the "Close" menu item (Cmd+W). When multiple panes exist,
     /// close just this browser pane via a notification. When this is the only
     /// pane, fall through to the default window close.
@@ -278,6 +198,7 @@ class WatchtowerWebView: WKWebView {
 
 struct BrowserWebView: NSViewRepresentable {
     @ObservedObject var browser: BrowserPaneModel
+    @ObservedObject private var appManager = GhosttyAppManager.shared
 
     func makeCoordinator() -> Coordinator {
         Coordinator(browser: browser)
@@ -287,9 +208,15 @@ struct BrowserWebView: NSViewRepresentable {
         let config = BrowserConfiguration.makeConfiguration()
         let webView = WatchtowerWebView(frame: .zero, configuration: config)
         webView.browser = browser
+        browser.webView = webView
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         context.coordinator.webView = webView
+
+        // Set the web view appearance based on the terminal theme so that
+        // CSS `prefers-color-scheme` matches the surrounding UI.
+        let appManager = GhosttyAppManager.shared
+        webView.appearance = NSAppearance(named: appManager.isDarkTheme ? .darkAqua : .aqua)
 
         // Register the form interaction message handler on this web view's
         // own content controller (each pane gets a fresh configuration).
@@ -317,6 +244,13 @@ struct BrowserWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WatchtowerWebView, context: Context) {
+        // Keep the web view appearance in sync with the terminal theme so
+        // that CSS `prefers-color-scheme` reflects light/dark changes.
+        let desired = NSAppearance(named: appManager.isDarkTheme ? .darkAqua : .aqua)
+        if webView.appearance?.name != desired?.name {
+            webView.appearance = desired
+        }
+
         // Only navigate when the model's navigation generation has advanced
         // past what the coordinator last loaded. This prevents KVO writeback
         // (which updates browser.url but not navigationGeneration) from
@@ -419,6 +353,22 @@ struct BrowserWebView: NSViewRepresentable {
             if navigationAction.shouldPerformDownload {
                 logger.info("[decidePolicyFor action] shouldPerformDownload=true — converting to download")
                 decisionHandler(.download, preferences)
+                return
+            }
+
+            // Cmd+click on a link opens it in a new browser pane, leaving
+            // the current pane untouched.
+            let isCmdHeld = navigationAction.modifierFlags.contains(.command)
+            if isCmdHeld,
+               navigationAction.navigationType == .linkActivated,
+               let targetURL = navigationAction.request.url {
+                logger.info("[decidePolicyFor action] Cmd+click — opening in new pane: \(targetURL.absoluteString, privacy: .public)")
+                DispatchQueue.main.async { [weak self] in
+                    guard let vm = self?.browser.viewModel else { return }
+                    let newBrowser = vm.addBrowser(url: targetURL)
+                    vm.focusPane(newBrowser)
+                }
+                decisionHandler(.cancel, preferences)
                 return
             }
 
@@ -551,6 +501,18 @@ struct BrowserWebView: NSViewRepresentable {
                       createWebViewWith configuration: WKWebViewConfiguration,
                       for navigationAction: WKNavigationAction,
                       windowFeatures: WKWindowFeatures) -> WKWebView? {
+            // Cmd+click opens the link in a new browser pane.
+            if navigationAction.modifierFlags.contains(.command),
+               let targetURL = navigationAction.request.url {
+                logger.info("[createWebViewWith] Cmd+click — opening in new pane: \(targetURL.absoluteString, privacy: .public)")
+                DispatchQueue.main.async { [weak self] in
+                    guard let vm = self?.browser.viewModel else { return }
+                    let newBrowser = vm.addBrowser(url: targetURL)
+                    vm.focusPane(newBrowser)
+                }
+                return nil
+            }
+
             // Open target=_blank links in the same view
             if let url = navigationAction.request.url {
                 webView.load(URLRequest(url: url))

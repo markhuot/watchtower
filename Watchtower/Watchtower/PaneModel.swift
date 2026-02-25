@@ -43,8 +43,8 @@ class PaneModel: Identifiable, ObservableObject {
     /// to the view model's `panes` array.
     weak var viewModel: PaneContainerViewModel?
 
-    /// Default pane width: 80 columns * 9px per char + 40px padding
-    static let defaultPaneWidth: CGFloat = 80 * 9 + 40
+    /// Default pane width: 80 columns * 10px per char + 40px padding
+    static let defaultPaneWidth: CGFloat = 80 * 10 + 40
 
     // Subclasses override these computed properties
     var title: String { "" }

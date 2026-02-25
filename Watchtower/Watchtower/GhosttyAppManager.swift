@@ -32,6 +32,40 @@ class GhosttyAppManager: ObservableObject {
     /// Foreground color from Ghostty config, used for subtle UI elements like unfocused pane borders.
     @Published private(set) var foregroundColor: Color = Color(white: 0.9)
 
+    /// Text color for pane headers, computed from the background luminance.
+    /// Returns white for dark backgrounds, black for light backgrounds, with
+    /// a smooth blend in between using relative luminance (WCAG formula).
+    var headerTextColor: Color {
+        let luminance = backgroundLuminance
+        // Smooth blend: luminance 0 → white, luminance 1 → black.
+        // The crossover at ~0.18 luminance (perceptual mid-gray) gives
+        // white text on dark themes and black text on light themes.
+        let brightness = 1.0 - min(max(luminance / 0.36, 0), 1)
+        return Color(white: brightness)
+    }
+
+    /// Whether the current theme is dark, derived from the background luminance.
+    /// Uses the same WCAG relative luminance as `headerTextColor`.
+    var isDarkTheme: Bool {
+        backgroundLuminance < 0.18
+    }
+
+    /// Relative luminance of the background color per WCAG 2.0 §1.4.3.
+    private var backgroundLuminance: Double {
+        guard let nsColor = NSColor(backgroundColor).usingColorSpace(.sRGB) else {
+            return 0.0
+        }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        nsColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+
+        func linearize(_ c: CGFloat) -> CGFloat {
+            c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linearize(r)
+             + 0.7152 * linearize(g)
+             + 0.0722 * linearize(b)
+    }
+
     /// Whether the application window is currently active (key window in foreground).
     @Published private(set) var isWindowActive: Bool = true
 
@@ -242,6 +276,9 @@ class GhosttyAppManager: ObservableObject {
             // We don't handle these yet but acknowledge them
             return false
 
+        case GHOSTTY_ACTION_OPEN_URL:
+            return openURL(app, target: target, v: action.action.open_url)
+
         case GHOSTTY_ACTION_CELL_SIZE:
             return setCellSize(app, target: target, v: action.action.cell_size)
 
@@ -384,6 +421,39 @@ class GhosttyAppManager: ObservableObject {
         return true
     }
 
+    private static func openURL(
+        _ app: ghostty_app_t,
+        target: ghostty_target_s,
+        v: ghostty_action_open_url_s
+    ) -> Bool {
+        guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
+        guard let surface = target.target.surface else { return false }
+        guard let view = surfaceView(from: surface) else { return false }
+        guard let urlPtr = v.url, v.len > 0 else { return false }
+
+        let data = Data(bytes: urlPtr, count: Int(v.len))
+        guard let urlString = String(data: data, encoding: .utf8) else { return false }
+
+        // Build a URL, assuming a file path if no scheme is present.
+        let url: URL
+        if let candidate = URL(string: urlString), candidate.scheme != nil {
+            url = candidate
+        } else {
+            url = URL(filePath: urlString)
+        }
+
+        DispatchQueue.main.async {
+            if let vm = view.terminal.viewModel {
+                let browser = vm.addBrowser(url: url)
+                vm.focusPane(browser)
+            } else {
+                // Fallback: open in the system browser
+                NSWorkspace.shared.open(url)
+            }
+        }
+        return true
+    }
+
     // MARK: - Theme Colors
 
     private static func readBackgroundColor(from config: ghostty_config_t) -> Color {
@@ -413,21 +483,17 @@ class GhosttyAppManager: ObservableObject {
     }
 
     private static func readHighlightColor(from config: ghostty_config_t) -> Color {
-        var color = ghostty_config_color_s(r: 0, g: 0, b: 0)
-
-        // Try selection-background first
-        let selKey = "selection-background"
-        if ghostty_config_get(config, &color, selKey, UInt(selKey.lengthOfBytes(using: .utf8))) {
-            return Color(
-                red: Double(color.r) / 255,
-                green: Double(color.g) / 255,
-                blue: Double(color.b) / 255
-            )
-        }
-
-        // Fallback to cursor-color
-        let cursorKey = "cursor-color"
-        if ghostty_config_get(config, &color, cursorKey, UInt(cursorKey.lengthOfBytes(using: .utf8))) {
+        // Read palette index 4 (blue) from the Ghostty theme.
+        // Note: selection-background and cursor-color use TerminalColor (a tagged union)
+        // which the Ghostty C API cannot export. The palette uses plain Color structs
+        // and is fully readable.
+        var palette = ghostty_config_palette_s()
+        let key = "palette"
+        if ghostty_config_get(config, &palette, key, UInt(key.lengthOfBytes(using: .utf8))) {
+            let color: ghostty_config_color_s = withUnsafeBytes(of: &palette.colors) { rawBuffer in
+                let colors = rawBuffer.bindMemory(to: ghostty_config_color_s.self)
+                return colors[4]
+            }
             return Color(
                 red: Double(color.r) / 255,
                 green: Double(color.g) / 255,
