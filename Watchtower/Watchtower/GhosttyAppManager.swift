@@ -487,13 +487,23 @@ class GhosttyAppManager: ObservableObject {
         // Note: selection-background and cursor-color use TerminalColor (a tagged union)
         // which the Ghostty C API cannot export. The palette uses plain Color structs
         // and is fully readable.
-        var palette = ghostty_config_palette_s()
+        //
+        // IMPORTANT: Ghostty's Zig-side Palette.C struct uses [265]Color.C (a typo,
+        // should be 256), so ghostty_config_get writes 265×3 = 795 bytes — more than
+        // the C header's ghostty_config_palette_s (256×3 = 768 bytes). We heap-allocate
+        // a buffer large enough for the Zig struct to avoid a stack buffer overflow.
+        let zigPaletteCount = 265 // matches ghostty/src/config/Config.zig Palette.C
+        let bufferSize = zigPaletteCount * MemoryLayout<ghostty_config_color_s>.stride
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: MemoryLayout<ghostty_config_color_s>.alignment)
+        defer { buffer.deallocate() }
+
+        // Zero-initialize so unwritten slots (256..264) are deterministic
+        buffer.initializeMemory(as: UInt8.self, repeating: 0, count: bufferSize)
+
         let key = "palette"
-        if ghostty_config_get(config, &palette, key, UInt(key.lengthOfBytes(using: .utf8))) {
-            let color: ghostty_config_color_s = withUnsafeBytes(of: &palette.colors) { rawBuffer in
-                let colors = rawBuffer.bindMemory(to: ghostty_config_color_s.self)
-                return colors[4]
-            }
+        if ghostty_config_get(config, buffer, key, UInt(key.lengthOfBytes(using: .utf8))) {
+            let colors = buffer.bindMemory(to: ghostty_config_color_s.self, capacity: zigPaletteCount)
+            let color = colors[4]
             return Color(
                 red: Double(color.r) / 255,
                 green: Double(color.g) / 255,
