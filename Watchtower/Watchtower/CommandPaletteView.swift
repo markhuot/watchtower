@@ -189,6 +189,14 @@ struct CommandPaletteView: View {
         items.append(.builtIn(name: "Close Panes to the Right") { vm in
             vm.closePanesToTheRight()
         })
+
+        // Collapse / Expand toggle — label reflects the focused pane's current state
+        if let focusedPane = viewModel.contextualPane {
+            let collapseLabel = focusedPane.isCollapsed ? "Expand Pane" : "Collapse Pane"
+            items.append(.builtIn(name: collapseLabel) { vm in
+                vm.toggleCollapsePane()
+            })
+        }
         items.append(.builtIn(name: "Toggle Full Screen", shortcut: "\u{2303}\u{2318}F") { vm in
             NSApp.keyWindow?.toggleFullScreen(nil)
         })
@@ -470,10 +478,8 @@ struct CommandPaletteView: View {
                 onSubmit: { forceNewPane in executeSelected(forceNewPane: forceNewPane) },
                 onEscape: { viewModel.dismissCommandPalette() }
             )
-            .frame(minHeight: 36)
-            .padding(.horizontal, 10)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 10)
 
             Divider()
                 .background(Color.white.opacity(0.1))
@@ -486,7 +492,7 @@ struct CommandPaletteView: View {
                         .font(.system(size: 13))
                     Spacer()
                 }
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 22)
                 .padding(.vertical, 10)
             } else {
                 VStack(spacing: 0) {
@@ -495,7 +501,7 @@ struct CommandPaletteView: View {
                         if index == queryActionSeparatorIndex && index > 0 {
                             Divider()
                                 .background(Color.white.opacity(0.1))
-                                .padding(.horizontal, 14)
+                                .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
                         }
 
@@ -523,10 +529,24 @@ struct CommandPaletteView: View {
                         .padding(.vertical, 6)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 8)
             }
         }
         .background(.ultraThinMaterial)
+        .background(
+            GeometryReader { geo in
+                let centerY = 300 / max(geo.size.height, 1)
+                RadialGradient(
+                    gradient: Gradient(colors: [
+                        appManager.highlightColor.opacity(0.25),
+                        appManager.highlightColor.opacity(0.0)
+                    ]),
+                    center: UnitPoint(x: 0.5, y: centerY),
+                    startRadius: 0,
+                    endRadius: 300
+                )
+            }
+        )
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius)
@@ -671,7 +691,7 @@ struct CommandPaletteRow: View {
                 : Color.clear
         )
         .cornerRadius(4)
-        .padding(.horizontal, 4)
+        .padding(.horizontal, 8)
     }
 
     /// Result of truncating a display string to fit on one line.

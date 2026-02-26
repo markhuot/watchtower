@@ -205,10 +205,14 @@ struct PaneWithHandle: View {
     /// Approximate cell width in points (matches PaneModel.defaultPaneWidth calculation).
     static let estimatedCellWidth: CGFloat = 9
 
-    /// The effective width of this pane, accounting for focus mode.
+    /// The effective width of this pane, accounting for focus mode and collapse state.
+    /// When collapsed, the pane shrinks to a narrow strip.
     /// When this pane is the focus-mode target the pane content itself
     /// expands to the focus-mode minimum (which varies by pane type).
     private var effectiveWidth: CGFloat {
+        if pane.isCollapsed {
+            return PaneModel.collapsedPaneWidth
+        }
         let isFocusModeTarget = viewModel.isFocusMode && pane.id == viewModel.focusModePaneId
         if isFocusModeTarget {
             return max(pane.paneWidth, pane.focusModeMinWidth(windowWidth: windowWidth))
@@ -262,6 +266,7 @@ struct PaneWithHandle: View {
                 })
                 .frame(width: effectiveWidth)
                 .animation(nil, value: pane.paneWidth)
+                .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
                 .onDrop(of: [.text], delegate: PaneSplitDropDelegate(
                     paneIndex: index,
                     paneWidth: pane.paneWidth,
@@ -774,12 +779,19 @@ class PaneContainerViewModel: ObservableObject {
     // MARK: - Command Palette
 
     /// Toggle the command palette on/off.
+    /// If the focused pane is collapsed, auto-expand it first so the
+    /// palette has enough room to render.
     func toggleCommandPalette() {
         if isCommandPalettePresented {
             dismissCommandPalette()
         } else {
             // Open the palette on the currently focused pane
             if let focused = panes.first(where: { $0.isFocused }) {
+                if focused.isCollapsed {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        focused.isCollapsed = false
+                    }
+                }
                 commandPalettePaneId = focused.id
             }
         }
@@ -788,6 +800,7 @@ class PaneContainerViewModel: ObservableObject {
     /// Open the command palette pre-filled with the focused browser's URL.
     /// If the focused pane is not a browser the palette opens normally.
     /// If the palette is already open, it is dismissed instead (toggle).
+    /// Auto-expands the pane if it is collapsed.
     func focusCommandPalette() {
         if isCommandPalettePresented {
             dismissCommandPalette()
@@ -797,6 +810,11 @@ class PaneContainerViewModel: ObservableObject {
             commandPaletteInitialText = browser.url.absoluteString
         }
         if let focused = panes.first(where: { $0.isFocused }) {
+            if focused.isCollapsed {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    focused.isCollapsed = false
+                }
+            }
             commandPalettePaneId = focused.id
         }
     }
@@ -901,6 +919,14 @@ class PaneContainerViewModel: ObservableObject {
         withAnimation(.easeInOut(duration: 0.2)) {
             isFocusMode = false
             focusModePaneId = nil
+        }
+    }
+
+    /// Toggle the collapsed state of the currently focused pane.
+    func toggleCollapsePane() {
+        guard let pane = contextualPane else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            pane.isCollapsed.toggle()
         }
     }
 
@@ -1090,6 +1116,14 @@ class PaneContainerViewModel: ObservableObject {
         // Auto-dismiss the command palette when focus moves to a different pane.
         if let paletteId = commandPalettePaneId, paletteId != pane.id {
             commandPalettePaneId = nil
+        }
+
+        // Explicitly clear isFocused on all other panes. Normally this is
+        // handled by resignFirstResponder on the NSView, but when a pane is
+        // collapsed its NSView has been removed from the hierarchy and
+        // resignFirstResponder will never fire, leaving stale isFocused state.
+        for p in panes where p.id != pane.id {
+            p.isFocused = false
         }
 
         // Reactive focus-mode update: when focus mode is active, the spotlight

@@ -59,6 +59,9 @@ struct PaneView: View {
 
     /// The shadow color for the focus highlight glow.
     private var highlightShadowColor: Color {
+        if pane.isCollapsed {
+            return Color.clear  // no glow on collapsed panes — too narrow
+        }
         if isHighlightActive {
             return appManager.highlightColor.opacity(0.6)
         } else {
@@ -68,7 +71,10 @@ struct PaneView: View {
     
     var body: some View {
         ZStack(alignment: .top) {
-            // Existing pane content (header + content area)
+            // Normal pane content — always in the hierarchy so terminals
+            // and browsers keep running. Hidden visually when collapsed.
+            // When collapsed, we clamp the content to the collapsed width
+            // and clip overflow so it doesn't influence the ZStack's size.
             VStack(spacing: 0) {
                 // Header — acts as drag handle with click-to-focus support
                 ZStack(alignment: .leading) {
@@ -130,23 +136,23 @@ struct PaneView: View {
                     BrowserWebView(browser: browser)
                 }
             }
-            .background(appManager.backgroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .strokeBorder(
-                        highlightBorderColor,
-                        lineWidth: 2
-                    )
-                    .shadow(
-                        color: highlightShadowColor,
-                        radius: 8
-                    )
-                    .allowsHitTesting(false)
-            )
+            .frame(width: pane.isCollapsed ? PaneModel.collapsedPaneWidth : nil)
+            .clipped()
+            .opacity(pane.isCollapsed ? 0 : 1)
+            .allowsHitTesting(!pane.isCollapsed)
 
-            // Command palette overlay (only on the pane it was opened from)
-            if isPaletteOpenHere {
+            // Collapsed overlay — sits on top when collapsed
+            if pane.isCollapsed {
+                CollapsedPaneContent(
+                    pane: pane,
+                    onClose: onClose,
+                    onDragStarted: onDragStarted,
+                    onHeaderTapped: onHeaderTapped
+                )
+            }
+
+            // Command palette overlay (only on the pane it was opened from, never when collapsed)
+            if isPaletteOpenHere && !pane.isCollapsed {
                 // Dismiss layer — covers the pane area behind the palette
                 Color.clear
                     .contentShape(Rectangle())
@@ -162,11 +168,83 @@ struct PaneView: View {
                     .transition(.opacity)
             }
         }
+        .background(appManager.backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .strokeBorder(
+                    highlightBorderColor,
+                    lineWidth: 2
+                )
+                .shadow(
+                    color: highlightShadowColor,
+                    radius: 8
+                )
+                .allowsHitTesting(false)
+        )
         .opacity(pane.isDragging ? 0.5 : 1.0)
         .animation(.easeInOut(duration: 0.15), value: pane.isFocused)
         .animation(.easeInOut(duration: 0.15), value: controlActiveState)
         .animation(.easeInOut(duration: 0.15), value: pane.isDragging)
         .animation(.easeOut(duration: 0.15), value: viewModel.commandPalettePaneId)
+        .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
+    }
+}
+
+// MARK: - Collapsed Pane Content
+
+/// The content shown when a pane is collapsed: a narrow vertical strip
+/// with the status icon at the top and the title rotated 90 degrees.
+/// The underlying terminal/browser continues running — only the view is hidden.
+struct CollapsedPaneContent: View {
+    @ObservedObject var pane: PaneModel
+    @ObservedObject private var appManager = GhosttyAppManager.shared
+    var onClose: (() -> Void)? = nil
+    var onDragStarted: (() -> Void)? = nil
+    var onHeaderTapped: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Status circle at the top — left-aligned with the same 12px
+            // leading padding as the expanded header so the icon doesn't
+            // shift horizontally when collapsing/expanding.
+            HStack {
+                StatusCircle(status: pane.status, onClose: onClose)
+                    .padding(.leading, 12)
+                Spacer()
+            }
+            .padding(.top, 14)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Rotated title — placed in an overlay on the full-size VStack
+        // so the text's natural (pre-rotation) width never influences the
+        // collapsed pane's layout. rotationEffect is purely visual; SwiftUI
+        // still uses the pre-rotation frame for sizing, so without this
+        // technique long titles would push the pane wider than 30px.
+        .overlay(alignment: .topLeading) {
+            Text(pane.title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(appManager.headerTextColor.opacity(0.7))
+                .lineLimit(1)
+                .fixedSize()
+                .rotationEffect(.degrees(90), anchor: .topLeading)
+                // After 90° rotation around topLeading the text extends
+                // rightward (old width is now height) and its visual top
+                // sits at the anchor. Offset down past the status circle
+                // (14pt padding + 16pt circle + 12pt gap = 42pt) and right
+                // to center it horizontally in the ~40px strip.
+                .offset(x: 27, y: 42)
+        }
+        .background(appManager.backgroundColor.opacity(0.8))
+        .overlay(
+            DragSourceView(
+                pane: pane,
+                onDragStarted: onDragStarted,
+                onClicked: onHeaderTapped
+            )
+        )
     }
 }
 

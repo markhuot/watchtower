@@ -127,6 +127,11 @@ class WatchtowerWebView: WKWebView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
 
+        // When collapsed, block key equivalents from reaching WebKit.
+        // Return false so menu shortcuts (Cmd+Shift+P, Cmd+L, etc.) still
+        // propagate through the responder chain to the menu system.
+        if let browser = browser, browser.isCollapsed { return false }
+
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
         // Let Cmd+Shift+[ and Cmd+Shift+] pass through to the menu system
@@ -146,6 +151,22 @@ class WatchtowerWebView: WKWebView {
         }
 
         return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // When collapsed, swallow all key events. Enter/Return expands the pane.
+        if let browser = browser, browser.isCollapsed {
+            if event.keyCode == 36 || event.keyCode == 76 { // Return or Enter
+                browser.viewModel?.toggleCollapsePane()
+            }
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func keyUp(with event: NSEvent) {
+        if let browser = browser, browser.isCollapsed { return }
+        super.keyUp(with: event)
     }
 
     /// Intercept the "Close" menu item (Cmd+W). When multiple panes exist,
@@ -207,6 +228,7 @@ struct BrowserWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WatchtowerWebView {
         let config = BrowserConfiguration.makeConfiguration()
         let webView = WatchtowerWebView(frame: .zero, configuration: config)
+        webView.isInspectable = true
         webView.browser = browser
         browser.webView = webView
         webView.navigationDelegate = context.coordinator

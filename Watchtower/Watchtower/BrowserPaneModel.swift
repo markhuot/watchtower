@@ -32,7 +32,13 @@ class BrowserPaneModel: PaneModel {
     @Published var navigationGeneration: UInt = 0
 
     override var title: String { pageTitle }
-    override var subtitle: String? { url.host }
+    override var subtitle: String? {
+        guard let host = url.host else { return nil }
+        if host.hasPrefix("www.") {
+            return String(host.dropFirst(4))
+        }
+        return host
+    }
     override var directory: String? { nil }
 
     override var status: PaneStatus {

@@ -37,6 +37,7 @@ class PaneModel: Identifiable, ObservableObject {
     @Published var paneWidth: CGFloat
     @Published var isFocused: Bool = false
     @Published var isDragging: Bool = false
+    @Published var isCollapsed: Bool = false
 
     /// Weak reference to the parent view model, used by NSViews to check
     /// `pendingFocus` in `viewDidMoveToWindow`. Set when the pane is added
@@ -45,6 +46,11 @@ class PaneModel: Identifiable, ObservableObject {
 
     /// Default pane width: 80 columns * 10px per char + 40px padding
     static let defaultPaneWidth: CGFloat = 80 * 10 + 40
+
+    /// Width of a collapsed pane strip (status icon + rotated title).
+    /// Sized so the status icon stays at the same horizontal position
+    /// (12px leading + 8px center = 20px) as in the expanded header.
+    static let collapsedPaneWidth: CGFloat = 40
 
     // Subclasses override these computed properties
     var title: String { "" }

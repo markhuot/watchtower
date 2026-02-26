@@ -430,6 +430,14 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     // MARK: - Keyboard Input
 
     override func keyDown(with event: NSEvent) {
+        // When collapsed, swallow all key events. Enter/Return expands the pane.
+        if terminal.isCollapsed {
+            if event.keyCode == 36 || event.keyCode == 76 { // Return or Enter
+                terminal.viewModel?.toggleCollapsePane()
+            }
+            return
+        }
+
         guard let surface = self.surface else {
             self.interpretKeyEvents([event])
             return
@@ -526,10 +534,13 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     }
 
     override func keyUp(with event: NSEvent) {
+        if terminal.isCollapsed { return }
         _ = keyAction(GHOSTTY_ACTION_RELEASE, event: event)
     }
 
     override func flagsChanged(with event: NSEvent) {
+        if terminal.isCollapsed { return }
+
         let mod: UInt32
         switch event.keyCode {
         case 0x39: mod = GHOSTTY_MODS_CAPS.rawValue
@@ -570,6 +581,12 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
+
+        // When collapsed, block key equivalents from reaching the terminal.
+        // Return false so menu shortcuts (Cmd+Shift+P, Cmd+L, etc.) still
+        // propagate through the responder chain to the menu system.
+        if terminal.isCollapsed { return false }
+
         guard focused else { return false }
 
         // Check for control key events that need special handling
