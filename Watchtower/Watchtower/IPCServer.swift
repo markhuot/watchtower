@@ -13,7 +13,7 @@ import os
 ///
 /// Command format (request):
 ///   { "command": "new-terminal", "paneId": "...", "directory": "/...", "shellCommand": "..." }
-///   { "command": "new-browser",  "paneId": "...", "url": "https://...", "engine": "webkit|chromium" }
+///   { "command": "new-browser",  "paneId": "...", "url": "https://...", "engine": "webkit|chromium", "remoteDebuggingPort": 9222 }
 ///
 /// Response format:
 ///   { "ok": true, "paneId": "..." }
@@ -311,9 +311,29 @@ final class IPCServer {
             engine = nil
         }
 
+        // Handle remote debugging port — must be set before CEF initializes
+        var warning: String? = nil
+        if let port = json["remoteDebuggingPort"] as? Int, port > 0 {
+            if ChromiumManager.shared.isInitialized {
+                let currentPort = ChromiumManager.shared.initializedRemoteDebuggingPort
+                if currentPort != port {
+                    warning = "CEF is already initialized with remote debugging port \(currentPort). Cannot change to \(port). Using existing port."
+                }
+                // If same port, no warning needed — it's already active
+            } else {
+                // CEF not yet initialized — set the port so it picks it up on init
+                WatchtowerConfig.shared.chromiumRemoteDebuggingPort = port
+            }
+        }
+
         let browser = viewModel.addBrowser(url: url, engine: engine)
         viewModel.focusPane(browser)
-        return ["ok": true, "paneId": browser.id.uuidString]
+
+        var response: [String: Any] = ["ok": true, "paneId": browser.id.uuidString]
+        if let warning = warning {
+            response["warning"] = warning
+        }
+        return response
     }
 }
 

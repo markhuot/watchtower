@@ -11,6 +11,10 @@ class ChromiumManager {
     private var initialized = false
     private var pumpTimer: Timer?
 
+    /// The remote debugging port CEF was initialized with (0 = disabled).
+    /// Only valid after `ensureInitialized()` succeeds.
+    private(set) var initializedRemoteDebuggingPort: Int = 0
+
     private var cefApp: UnsafeMutablePointer<cef_app_t>?
     private var browserProcessHandler: UnsafeMutablePointer<cef_browser_process_handler_t>?
 
@@ -102,6 +106,7 @@ class ChromiumManager {
         cefStringSet(helperPath, cefStr: &settings.browser_subprocess_path)
 
         settings.remote_debugging_port = Int32(WatchtowerConfig.shared.chromiumRemoteDebuggingPort)
+        initializedRemoteDebuggingPort = WatchtowerConfig.shared.chromiumRemoteDebuggingPort
         settings.log_severity = LOGSEVERITY_VERBOSE
 
         // Initialize

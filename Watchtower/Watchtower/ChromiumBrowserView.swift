@@ -83,14 +83,42 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
         }
     }
 
-    // MARK: - First Responder (minimal)
+    // MARK: - First Responder
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// Tracks whether we intentionally gave CEF focus. Used by the CEF
+    /// focus handler callbacks to distinguish intentional focus from CEF
+    /// trying to reclaim focus on its own.
+    var cefHasFocus: Bool = false
+
+    /// KVO observation of window.firstResponder. When first responder moves
+    /// outside our view hierarchy we blur CEF; this single observer replaces
+    /// procedural blurCEF() calls at every site that might take focus.
+    private var firstResponderObservation: NSKeyValueObservation?
+
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
+
         if result {
+            cefHasFocus = true
             browser?.isFocused = true
+
+            // Notify the view model so focusModePaneId is updated (which
+            // drives the focus-mode width expansion). Without this, direct
+            // clicks on the Chromium view bypass focusPane() entirely and the
+            // pane never expands / receives focus state.
+            if let browser = browser, let vm = browser.viewModel {
+                if vm.focusModePaneId != browser.id || vm.contextualPane?.id != browser.id {
+                    vm.focusPane(id: browser.id)
+                }
+            }
+
+            scrollToVisibleInEnclosingScrollView()
+            DispatchQueue.main.async { [weak self] in
+                self?.scrollToVisibleInEnclosingScrollView()
+            }
+
             if let host = cefBrowser?.pointee.get_host?(cefBrowser!) {
                 host.pointee.set_focus?(host, 1)
                 _ = host.pointee.base.release?(&host.pointee.base)
@@ -100,17 +128,44 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
     }
 
     override func resignFirstResponder() -> Bool {
-        let result = super.resignFirstResponder()
-        if result {
-            browser?.isFocused = false
-        }
-        return result
+        return super.resignFirstResponder()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard self.window != nil else { return }
 
+        // Tear down old observation when moving between windows
+        firstResponderObservation?.invalidate()
+        firstResponderObservation = nil
+
+        guard let window = self.window else { return }
+
+        // Observe window.firstResponder. When it moves outside our
+        // subtree, tell CEF to release focus. This is reactive — it
+        // covers command palette, other panes, accessibility controls,
+        // or anything else that becomes first responder.
+        firstResponderObservation = window.observe(\.firstResponder, options: [.new]) { [weak self] window, _ in
+            guard let self = self else { return }
+            let responder = window.firstResponder
+            let isOurs = (responder as? NSView)?.isDescendant(of: self) == true
+                || responder === self
+
+            if isOurs && !self.cefHasFocus {
+                // CEF child view took focus (e.g. after set_focus(1))
+                self.cefHasFocus = true
+                self.browser?.isFocused = true
+            } else if !isOurs && self.cefHasFocus {
+                // Focus moved outside — blur CEF
+                self.cefHasFocus = false
+                self.browser?.isFocused = false
+                if let host = self.cefBrowser?.pointee.get_host?(self.cefBrowser!) {
+                    host.pointee.set_focus?(host, 0)
+                    _ = host.pointee.base.release?(&host.pointee.base)
+                }
+            }
+        }
+
+        // Handle pending focus for newly-created panes
         if let pending = browser?.viewModel?.pendingFocus,
            pending.paneId == browser?.id,
            pending.fulfill() {

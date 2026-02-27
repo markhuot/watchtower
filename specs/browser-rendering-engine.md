@@ -344,27 +344,44 @@ This matches the behavior users expect from progress bars even without granular 
 
 #### 5d. Focus Management
 
-`ChromiumBrowserView` implements the same focus tracking as `WatchtowerWebView`:
+CEF creates an opaque child view inside `ChromiumBrowserView` (via `windowInfo.parent_view` in `createCEFBrowser`). This child view becomes the actual first responder, not our `ChromiumBrowserView`. This means `resignFirstResponder` on `ChromiumBrowserView` fires even when CEF is *supposed* to have focus (because CEF moved first responder from our view to its child). This makes `resignFirstResponder` unreliable for detecting when focus truly leaves the browser pane.
+
+**Approach: KVO on `window.firstResponder`** — A single reactive observer replaces procedural blur calls. In `viewDidMoveToWindow()`, `ChromiumBrowserView` installs an `NSKeyValueObservation` on `window.firstResponder`. When first responder moves outside the view's subtree (`isDescendant(of: self)`), CEF is blurred via `set_focus(0)`. When it moves into the subtree (CEF's child view taking over), `cefHasFocus` is set. This single observer handles all focus transitions: clicking other panes, opening the command palette, keyboard navigation, etc.
 
 ```swift
 override var acceptsFirstResponder: Bool { true }
 
+var cefHasFocus: Bool = false
+private var firstResponderObservation: NSKeyValueObservation?
+
 override func becomeFirstResponder() -> Bool {
     let result = super.becomeFirstResponder()
     if result {
+        cefHasFocus = true
         browser?.isFocused = true
-        // Same pendingFocus / focusPane / scrollToVisible logic
-        // as WatchtowerWebView.becomeFirstResponder
+        // focusPane, scrollToVisible, set_focus(1) on CEF host
     }
     return result
 }
 
 override func resignFirstResponder() -> Bool {
-    let result = super.resignFirstResponder()
-    if result { browser?.isFocused = false }
-    return result
+    // Intentionally does NOT clear isFocused — CEF's child view
+    // triggers this during normal operation. The KVO observer
+    // handles the real blur detection.
+    return super.resignFirstResponder()
+}
+
+override func viewDidMoveToWindow() {
+    // Install KVO on window.firstResponder
+    // When isDescendant(of: self) → cefHasFocus = true
+    // When !isDescendant(of: self) → cefHasFocus = false, set_focus(0)
 }
 ```
+
+**CEF Focus Handler (`cef_focus_handler_t`)** — Prevents CEF from stealing focus:
+- `on_set_focus`: Gated by `cefHasFocus`. Returns 1 (block) when `cefHasFocus == false`, preventing CEF from reclaiming focus after we've moved it elsewhere.
+- `on_got_focus`: **The `cefHasFocus` guard MUST be inside `DispatchQueue.main.async`**, not before it. `on_got_focus` is called from CEF's thread, and the KVO observer may clear `cefHasFocus` on the main thread between the callback firing and the async block executing. Checking outside the async block causes a race condition where stale `on_got_focus` dispatches call `focusPane()` and snap focus back to the browser.
+- `on_take_focus`: No-op.
 
 The `performKeyEquivalent` override also mirrors `WatchtowerWebView` — passing Cmd+Shift+[/] and Cmd+L through to the menu system.
 
@@ -373,8 +390,8 @@ The `performClose` override mirrors the same Cmd+W interception pattern (form co
 #### 5e. Appearance Syncing
 
 CEF does not have an `appearance` property like `WKWebView`. Instead, to sync dark/light theme for `prefers-color-scheme`:
-- Use `cef_browser_host_t.execute_dev_tools_method` to call `Emulation.setEmulatedMedia` with `features: [{ name: "prefers-color-scheme", value: "dark" }]` (or `"light"`).
-- Alternatively, inject a `matchMedia` override via JavaScript, though the DevTools Protocol approach is more reliable.
+- Use `cef_browser_host_t.send_dev_tools_message` with a raw JSON CDP message calling `Emulation.setEmulatedMedia` with `features: [{ name: "prefers-color-scheme", value: "dark" }]` (or `"light"`).
+- **Important:** Do NOT use `execute_dev_tools_method` with `cef_dictionary_value_create`/`cef_list_value_create` for nested params — this crashes. Always use `send_dev_tools_message` with raw JSON strings for DevTools Protocol calls. See Critical Gotcha #10.
 
 #### 5f. Shared State Across Panes
 
@@ -618,8 +635,8 @@ All infrastructure and the core rendering pipeline are done:
 | 8. View routing in `TerminalPaneView` | **Done** | Branches on `browser.engine` |
 | 9. CEF integration (build) | **Done** | CEF framework linked/embedded, helper target, bridging header, search paths |
 | 10. `ChromiumManager` singleton | **Done** | Init, message pump (60Hz Timer), shutdown |
-| 11. `ChromiumBrowserView` (NSView) | **Done** | Core works: loadRequest, goBack/Forward/Reload/Stop, focus, key equiv passthrough, performClose with `hasInteractedForms` confirmation, `keyDown`/`keyUp` for collapsed panes, appearance sync via `send_dev_tools_message`. |
-| 12. CEF client handlers | **Partial** | Life span handler, load handler (A), display handler (B), progress timer (C), appearance syncing (D), form interaction JS injection (E) all working. Missing: download handler (H). |
+| 11. `ChromiumBrowserView` (NSView) | **Done** | Core works: loadRequest, goBack/Forward/Reload/Stop, focus (KVO + cef_focus_handler_t), key equiv passthrough, performClose with `hasInteractedForms` confirmation, `keyDown`/`keyUp` for collapsed panes, appearance sync via `send_dev_tools_message`. |
+| 12. CEF client handlers | **Done** | Life span handler, load handler (A), display handler (B), progress timer (C), appearance syncing (D), form interaction JS injection (E), download handler (H) all working. |
 | 13. `ChromiumBrowserRepresentable` | **Done** | Uses `cef_browser_host_create_browser_sync`. Generation-based navigation. |
 | 16. Scroll forwarding | **Done** | `ContentView.swift` checks `ChromiumBrowserView` in addition to `WKWebView` |
 | 17. `findBrowserEngineView` utility | **Done** | Updated in `ContentView.swift` |
@@ -688,15 +705,16 @@ Implemented and verified working. Added `keyDown(with:)` and `keyUp(with:)` over
 - Enter (keyCode 36), numpad Enter (keyCode 76), or Space (keyCode 49) expands the pane
 - `keyUp` is also swallowed when collapsed
 
-#### H. Download Handler (`cef_download_handler_t`) — LOW PRIORITY
+#### H. Download Handler (`cef_download_handler_t`) — DONE
 
 **File:** `CEFClientHandlers.swift`
 
-Callbacks needed:
-- **`on_before_download(browser, downloadItem, suggestedName, callback)`** — Show `NSSavePanel`, call `callback.pointee.cont(callback, path, showDialog=0)` with the chosen path.
-- **`on_download_updated(browser, downloadItem, callback)`** — Optional: track progress, handle completion/failure.
+Implemented and verified compiling. Callbacks:
+- **`can_download`** — allows all downloads (returns 1).
+- **`on_before_download(browser, downloadItem, suggestedName, callback)`** — shows `NSSavePanel` on main thread with the suggested filename pre-filled. On OK, removes any existing file at the destination (matching WebKit behavior), then calls `callback.cont(callback, &path, 0)`. On cancel, passes empty path. The callback is retained (`add_ref`) before dispatching to the main queue and released after the save panel completes.
+- **`on_download_updated(browser, downloadItem, callback)`** — logs completion, cancellation, and interruption. No progress UI (matches WebKit's simple logging approach).
 
-Wire into `cef_client_t` via `get_download_handler`.
+Wired into `cef_client_t` via `get_download_handler`. Registered in handler→context map. Cleaned up in `cefCleanupClientContext` and released in `CEFClientContext.deinit`.
 
 ### Technical Knowledge for Continuing
 
@@ -809,11 +827,11 @@ cat ~/Library/Application\ Support/Watchtower/CEF/chrome_debug.log
 10. **Do NOT use `cef_dictionary_value_create`/`cef_list_value_create` for nested DevTools Protocol params** — Building nested CEF value objects (dict containing list containing dict) crashes the app. Use `host.pointee.send_dev_tools_message` with a raw UTF-8 JSON string instead of `host.pointee.execute_dev_tools_method` with `cef_dictionary_value_t*` params. `send_dev_tools_message` takes `(host, void_pointer_to_utf8_bytes, byte_count)` and returns `Int32` (1 = success). The JSON must include `"id"` and `"method"` fields (full CDP message format).
 11. **`NSLog` variadic format arguments** — `NSLog("%@", someVar)` is unavailable from Swift closures in this SDK version. Use string interpolation: `NSLog("[CEF] msg: \(value)")`.
 12. **CEF `ERR_ABORTED` (-3)** — Fires when navigation is cancelled by a new load (e.g., double-loading the URL). Harmless; filter in `on_load_error` with `guard errorCode.rawValue != -3`.
+13. **CEF `on_got_focus` thread safety** — `on_got_focus` is called from CEF's thread, not the main thread. Any `cefHasFocus` guard must be inside `DispatchQueue.main.async`, not before it. The KVO observer on `window.firstResponder` clears `cefHasFocus` on the main thread; checking it from CEF's thread before dispatching creates a race where stale focus events snap focus back to the browser pane after the user clicked elsewhere.
 
 #### Known Issues
 
-1. **Click crash** — User reported a crash when clicking the rendered Chromium browser pane. Not yet investigated. Likely related to first responder handling or CEF's internal event processing.
-2. **Message pump efficiency** — Using a simple 60Hz Timer. The spec mentions `on_schedule_message_pump_work` for demand-driven pumping, but the timer works fine for now.
+1. **Message pump efficiency** — Using a simple 60Hz Timer. The spec mentions `on_schedule_message_pump_work` for demand-driven pumping, but the timer works fine for now.
 
 #### Xcode Project ID Scheme
 
@@ -833,10 +851,10 @@ PBXProj IDs use sequential human-readable IDs with prefix `AA`:
 | `BrowserEngineView.swift` | Create | **Done** | `BrowserEngineView` protocol defining the interface both engines implement. |
 | `SettingsView.swift` | Create | **Done** | Settings window with General tab containing the engine picker, backed by `WatchtowerConfig`. |
 | `ChromiumManager.swift` | Create | **Done** | Singleton for lazy CEF initialization, message loop integration, shutdown. |
-| `ChromiumBrowserView.swift` | Create | **Done** | Core works (load, navigate, focus, key equiv, close). Appearance sync via `send_dev_tools_message`. Close confirmation with `hasInteractedForms`. `keyDown`/`keyUp` for collapsed panes. |
+| `ChromiumBrowserView.swift` | Create | **Done** | Core works (load, navigate, focus, key equiv, close). Focus managed via KVO on `window.firstResponder` + `cef_focus_handler_t` with `cefHasFocus` gating. Appearance sync via `send_dev_tools_message`. Close confirmation with `hasInteractedForms`. `keyDown`/`keyUp` for collapsed panes. |
 | `ChromiumBrowserRepresentable.swift` | Create | **Done** | `NSViewRepresentable` wrapper using `cef_browser_host_create_browser_sync`. Appearance sync in `updateNSView` with `lastSyncedIsDark` change detection working. |
 | `CEFHelpers.swift` | Create | **Done** | `CEFRefCount`, `cefCreate<T>()`, string conversion, userdata helpers. |
-| `CEFClientHandlers.swift` | Create | **Partial** | Life span, load, display handlers, progress timer, and DevTools observer for form interaction all working. Missing: download handler. |
+| `CEFClientHandlers.swift` | Create | **Done** | Life span, load, display, download handlers, progress timer, and DevTools observer for form interaction all working. |
 | `CefApplication.swift` | Create | **Done** | `CefNSApplication` with CefAppProtocol conformance. |
 | `main.swift` | Create | **Done** | Entry point: NSApplication init, signal handlers, atexit, CEF eager init. |
 | `WatchtowerHelper/main.c` | Create | **Done** | Helper app entry point calling `cef_execute_process()`. |

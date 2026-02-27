@@ -168,7 +168,7 @@ bun build --compile src/index.ts --outfile watchtower  # compile to standalone b
 ### Commands
 
 - `watchtower new terminal [--directory <path>] [--command <cmd>]` — open a new terminal pane adjacent to the calling pane
-- `watchtower new browser <url>` — open a new browser pane adjacent to the calling pane
+- `watchtower new browser <url>` — open a new browser pane adjacent to the calling pane. Supports `--webkit`, `--chrome`, and `--remote-debugging-port <port>` options.
 
 ### IPC Protocol
 

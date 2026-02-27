@@ -20,7 +20,8 @@ class CEFClientContext {
 
     var loadHandler: UnsafeMutablePointer<cef_load_handler_t>?
     var displayHandler: UnsafeMutablePointer<cef_display_handler_t>?
-    // var downloadHandler: UnsafeMutablePointer<cef_download_handler_t>?
+    var downloadHandler: UnsafeMutablePointer<cef_download_handler_t>?
+    var focusHandler: UnsafeMutablePointer<cef_focus_handler_t>?
     var progressTimer: Timer?
 
     /// DevTools message observer for Runtime.bindingCalled (form interaction JS→native).
@@ -45,6 +46,12 @@ class CEFClientContext {
         }
         if let dh = displayHandler {
             _ = dh.pointee.base.release?(&dh.pointee.base)
+        }
+        if let dlh = downloadHandler {
+            _ = dlh.pointee.base.release?(&dlh.pointee.base)
+        }
+        if let fh = focusHandler {
+            _ = fh.pointee.base.release?(&fh.pointee.base)
         }
         // Release DevTools registration first (unregisters observer), then the observer itself
         if let reg = devToolsRegistration {
@@ -101,10 +108,18 @@ func cefMakeClient(context: CEFClientContext) -> UnsafeMutablePointer<cef_client
     let dh = cefMakeDisplayHandler(context: context)
     context.displayHandler = dh
 
+    let dlh = cefMakeDownloadHandler(context: context)
+    context.downloadHandler = dlh
+
+    let fh = cefMakeFocusHandler(context: context)
+    context.focusHandler = fh
+
     cefRegisterContext(context, forClient: client)
     cefRegisterHandler(UnsafeMutableRawPointer(lsh), context: context)
     cefRegisterHandler(UnsafeMutableRawPointer(lh), context: context)
     cefRegisterHandler(UnsafeMutableRawPointer(dh), context: context)
+    cefRegisterHandler(UnsafeMutableRawPointer(dlh), context: context)
+    cefRegisterHandler(UnsafeMutableRawPointer(fh), context: context)
 
     client.pointee.get_life_span_handler = { (selfPtr) -> UnsafeMutablePointer<cef_life_span_handler_t>? in
         guard let selfPtr = selfPtr else { return nil }
@@ -126,6 +141,22 @@ func cefMakeClient(context: CEFClientContext) -> UnsafeMutablePointer<cef_client
         guard let selfPtr = selfPtr else { return nil }
         guard let ctx = contextRegistry[UnsafeMutableRawPointer(selfPtr)] else { return nil }
         guard let handler = ctx.displayHandler else { return nil }
+        handler.pointee.base.add_ref?(&handler.pointee.base)
+        return handler
+    }
+
+    client.pointee.get_download_handler = { (selfPtr) -> UnsafeMutablePointer<cef_download_handler_t>? in
+        guard let selfPtr = selfPtr else { return nil }
+        guard let ctx = contextRegistry[UnsafeMutableRawPointer(selfPtr)] else { return nil }
+        guard let handler = ctx.downloadHandler else { return nil }
+        handler.pointee.base.add_ref?(&handler.pointee.base)
+        return handler
+    }
+
+    client.pointee.get_focus_handler = { (selfPtr) -> UnsafeMutablePointer<cef_focus_handler_t>? in
+        guard let selfPtr = selfPtr else { return nil }
+        guard let ctx = contextRegistry[UnsafeMutableRawPointer(selfPtr)] else { return nil }
+        guard let handler = ctx.focusHandler else { return nil }
         handler.pointee.base.add_ref?(&handler.pointee.base)
         return handler
     }
@@ -333,6 +364,141 @@ private func cefMakeDisplayHandler(context: CEFClientContext) -> UnsafeMutablePo
     return handler
 }
 
+// MARK: - Factory: cef_download_handler_t
+
+private func cefMakeDownloadHandler(context: CEFClientContext) -> UnsafeMutablePointer<cef_download_handler_t> {
+    let handler: UnsafeMutablePointer<cef_download_handler_t> = cefCreate()
+
+    // can_download: allow all downloads
+    handler.pointee.can_download = { (selfPtr, browser, url, requestMethod) -> Int32 in
+        return 1 // allow
+    }
+
+    // on_before_download: show NSSavePanel, then call callback.cont with the chosen path
+    handler.pointee.on_before_download = { (selfPtr, browser, downloadItem, suggestedName, callback) -> Int32 in
+        guard let selfPtr = selfPtr else { return 0 }
+        guard let callback = callback else { return 0 }
+
+        let suggestedFileName = cefStringToSwift(suggestedName)
+        let downloadUrl = cefStringUserfreeToSwift(downloadItem?.pointee.get_url?(downloadItem!))
+
+        NSLog("[CEF] on_before_download: suggestedName=\(suggestedFileName) url=\(downloadUrl)")
+
+        // Retain the callback so it survives until the save panel completes
+        callback.pointee.base.add_ref?(&callback.pointee.base)
+
+        DispatchQueue.main.async {
+            let savePanel = NSSavePanel()
+            savePanel.nameFieldStringValue = suggestedFileName
+            savePanel.canCreateDirectories = true
+
+            savePanel.begin { result in
+                if result == .OK, let url = savePanel.url {
+                    NSLog("[CEF] Download: user chose \(url.path)")
+                    // Remove existing file if present — CEF may or may not
+                    // handle this, but matching WebKit's behavior is safest.
+                    try? FileManager.default.removeItem(at: url)
+
+                    withCEFString(url.path) { cefPath in
+                        callback.pointee.cont?(callback, &cefPath, 0)
+                    }
+                } else {
+                    NSLog("[CEF] Download: user cancelled save panel")
+                    // Pass empty path to cancel the download
+                    withCEFString("") { emptyPath in
+                        callback.pointee.cont?(callback, &emptyPath, 0)
+                    }
+                }
+                // Release our retained reference to the callback
+                _ = callback.pointee.base.release?(&callback.pointee.base)
+            }
+        }
+
+        return 1 // we handle the callback
+    }
+
+    // on_download_updated: log progress, no UI for now (matches WebKit's simple approach)
+    handler.pointee.on_download_updated = { (selfPtr, browser, downloadItem, callback) in
+        guard let downloadItem = downloadItem else { return }
+
+        let isComplete = downloadItem.pointee.is_complete?(downloadItem) ?? 0
+        let isCanceled = downloadItem.pointee.is_canceled?(downloadItem) ?? 0
+        let isInterrupted = downloadItem.pointee.is_interrupted?(downloadItem) ?? 0
+
+        if isComplete != 0 {
+            let fullPath = cefStringUserfreeToSwift(downloadItem.pointee.get_full_path?(downloadItem))
+            NSLog("[CEF] Download finished: \(fullPath)")
+        } else if isCanceled != 0 {
+            NSLog("[CEF] Download cancelled")
+        } else if isInterrupted != 0 {
+            let reason = downloadItem.pointee.get_interrupt_reason?(downloadItem)
+            NSLog("[CEF] Download interrupted: reason=\(reason?.rawValue ?? 0)")
+        }
+    }
+
+    return handler
+}
+
+// MARK: - Factory: cef_focus_handler_t
+
+private func cefMakeFocusHandler(context: CEFClientContext) -> UnsafeMutablePointer<cef_focus_handler_t> {
+    let handler: UnsafeMutablePointer<cef_focus_handler_t> = cefCreate()
+
+    // on_take_focus: CEF is giving up focus (e.g. Tab from last element).
+    // No action needed — the next responder will handle it.
+    handler.pointee.on_take_focus = { (selfPtr, browser, next) in
+    }
+
+    // on_set_focus: CEF is requesting focus. Return 0 to allow, 1 to cancel.
+    // Only allow when our ChromiumBrowserView has intentionally granted CEF
+    // focus (cefHasFocus == true). This prevents CEF from stealing focus
+    // back after we've moved it to another pane or the command palette.
+    handler.pointee.on_set_focus = { (selfPtr, browser, source) -> Int32 in
+        guard let selfPtr = selfPtr else { return 1 }
+        guard let ctx = cefContextForHandler(UnsafeMutableRawPointer(selfPtr)) else { return 1 }
+        let allowed = ctx.browserView?.cefHasFocus == true
+        return allowed ? 0 : 1
+    }
+
+    // on_got_focus: CEF has received focus. Only propagate to the view model
+    // when our ChromiumBrowserView intentionally granted focus. This prevents
+    // CEF from reclaiming app-level focus after we've moved it elsewhere.
+    //
+    // IMPORTANT: The cefHasFocus guard MUST be inside the DispatchQueue.main.async
+    // block because on_got_focus is called from CEF's thread. The KVO observer
+    // on window.firstResponder may clear cefHasFocus on the main thread between
+    // the time this callback fires and the time the async block executes.
+    handler.pointee.on_got_focus = { (selfPtr, browser) in
+        guard let selfPtr = selfPtr else { return }
+        guard let ctx = cefContextForHandler(UnsafeMutableRawPointer(selfPtr)) else { return }
+        DispatchQueue.main.async {
+            // Re-check cefHasFocus on the main thread. If the KVO observer
+            // already cleared it (focus moved to another pane), bail out.
+            guard ctx.browserView?.cefHasFocus == true else {
+                return
+            }
+            guard let browserModel = ctx.browserModel else { return }
+            browserModel.isFocused = true
+
+            // Notify the view model so focusModePaneId is updated and
+            // other panes' isFocused flags are cleared.
+            if let vm = browserModel.viewModel {
+                if vm.focusModePaneId != browserModel.id || vm.contextualPane?.id != browserModel.id {
+                    vm.focusPane(id: browserModel.id)
+                }
+            }
+
+            // Scroll the pane into view
+            ctx.browserView?.scrollToVisibleInEnclosingScrollView()
+            DispatchQueue.main.async {
+                ctx.browserView?.scrollToVisibleInEnclosingScrollView()
+            }
+        }
+    }
+
+    return handler
+}
+
 // MARK: - DevTools Observer Setup (Form Interaction JS→Native)
 
 /// Create and register a DevTools message observer that listens for
@@ -457,6 +623,12 @@ func cefCleanupClientContext(_ context: CEFClientContext) {
     }
     if let dh = context.displayHandler {
         cefUnregisterHandler(UnsafeMutableRawPointer(dh))
+    }
+    if let dlh = context.downloadHandler {
+        cefUnregisterHandler(UnsafeMutableRawPointer(dlh))
+    }
+    if let fh = context.focusHandler {
+        cefUnregisterHandler(UnsafeMutableRawPointer(fh))
     }
     if let obs = context.devToolsObserver {
         cefUnregisterHandler(UnsafeMutableRawPointer(obs))

@@ -53,7 +53,7 @@ Non-obvious learnings specific to the Swift source files in this directory.
 ## CLI (`cli/` directory)
 
 - **Built with Bun + TypeScript**. Entry point: `cli/src/index.ts`.
-- **Commands**: `watchtower new terminal [--directory <path>] [--command <cmd>]` and `watchtower new browser <url>`.
+- **Commands**: `watchtower new terminal [--directory <path>] [--command <cmd>]` and `watchtower new browser [--webkit] [--chrome] [--remote-debugging-port <port>] <url>`.
 - **IPC client** (`cli/src/ipc.ts`): Connects to `~/.config/watchtower/watchtower.sock`, sends JSON, reads response. Reads `WATCHTOWER_PANE_ID` env var to identify the calling pane.
 - **Compile to binary**: `bun build --compile cli/src/index.ts --outfile watchtower` (not yet set up as a build step).
 
