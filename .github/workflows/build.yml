@@ -125,7 +125,30 @@ jobs:
           # Terminfo (needed for the ghostty TERM type and resource auto-detection)
           cp -R "$SHARE/terminfo" "$APP/terminfo"
 
-          # Re-sign since we modified the bundle contents
+          # Re-sign CEF components from the inside out.
+          # The CEF framework and its helper apps ship unsigned (or with an
+          # ad-hoc sig). Notarization requires hardened runtime + secure
+          # timestamp on every executable in the bundle.
+          FRAMEWORKS="$APP/../Frameworks"
+
+          # 1. Sign CEF dylibs inside the framework
+          for dylib in "$FRAMEWORKS/Chromium Embedded Framework.framework/Versions/A/Libraries/"*.dylib; do
+            codesign --force --sign "Developer ID Application" \
+              --timestamp --options runtime "$dylib"
+          done
+
+          # 2. Sign the CEF framework binary itself
+          codesign --force --sign "Developer ID Application" \
+            --timestamp --options runtime \
+            "$FRAMEWORKS/Chromium Embedded Framework.framework"
+
+          # 3. Sign each CEF helper app (GPU, Renderer, Alerts, Plugin, plain)
+          for helper in "$FRAMEWORKS/Watchtower Helper"*.app; do
+            codesign --force --sign "Developer ID Application" \
+              --timestamp --options runtime "$helper"
+          done
+
+          # 4. Re-sign the whole app bundle (includes our own binary + resources)
           codesign --force --sign "Developer ID Application" \
             --timestamp \
             --options runtime \
