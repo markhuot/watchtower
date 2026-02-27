@@ -21,11 +21,22 @@ class TerminalPaneModel: PaneModel {
     /// Set to `true` for workspace terminals with custom scripts.
     let waitAfterCommand: Bool
 
+    /// Text to send to the terminal once the shell is ready.
+    /// Used by the CLI to run a command in an interactive shell
+    /// so the user can continue typing after it completes.
+    let initialInput: String?
+
     /// Progress report from Ghostty's ConEmu OSC 9;4 protocol.
     @Published var progressReport: PaneProgress? = nil
 
     /// Auto-clear timer for progress reports (15 second timeout).
     private var progressClearTimer: Timer? = nil
+
+    /// Timer that clears the bell indicator 1 second after the pane gains focus.
+    private var bellClearTimer: Timer? = nil
+
+    /// Combine subscription for focus changes (used to clear bell on focus).
+    private var bellFocusCancellable: AnyCancellable? = nil
 
     /// In-flight git branch detection task, cancelled when directory changes.
     private var branchDetectionTask: Task<Void, Never>? = nil
@@ -60,7 +71,8 @@ class TerminalPaneModel: PaneModel {
         paneWidth: CGFloat = PaneModel.defaultPaneWidth,
         command: String? = nil,
         env: [String: String]? = nil,
-        waitAfterCommand: Bool = false
+        waitAfterCommand: Bool = false,
+        initialInput: String? = nil
     ) {
         self.terminalTitle = title
         self.terminalStatus = status
@@ -68,6 +80,7 @@ class TerminalPaneModel: PaneModel {
         self.command = command
         self.env = env
         self.waitAfterCommand = waitAfterCommand
+        self.initialInput = initialInput
 
         super.init(id: id, paneWidth: paneWidth)
 
@@ -89,6 +102,40 @@ class TerminalPaneModel: PaneModel {
                 self?.progressReport = nil
             }
         }
+    }
+
+    /// Called when the terminal rings the bell (BEL character / \a).
+    /// Sets `hasBell` on the pane. If the pane is already focused the
+    /// bell indicator clears after 1 second; otherwise it persists until
+    /// the pane receives focus and then clears 1 second later.
+    func ringBell() {
+        hasBell = true
+        bellClearTimer?.invalidate()
+        bellClearTimer = nil
+
+        if isFocused {
+            // Already focused — start the 1-second auto-clear now.
+            scheduleBellClear()
+        } else {
+            // Not focused — observe isFocused and start the timer when it flips.
+            bellFocusCancellable?.cancel()
+            bellFocusCancellable = $isFocused
+                .filter { $0 }          // only when becoming focused
+                .first()                 // one-shot
+                .sink { [weak self] _ in
+                    self?.scheduleBellClear()
+                }
+        }
+    }
+
+    /// Schedule the bell indicator to clear after 1 second.
+    private func scheduleBellClear() {
+        bellClearTimer?.invalidate()
+        bellClearTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+            self?.hasBell = false
+        }
+        bellFocusCancellable?.cancel()
+        bellFocusCancellable = nil
     }
 
     /// Detect the git branch for the given directory asynchronously.

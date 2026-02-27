@@ -1,6 +1,5 @@
 import SwiftUI
 
-@main
 struct WatchtowerApp: App {
     // Initialize Ghostty at app launch
     @StateObject private var ghosttyManager = GhosttyAppManager.shared
@@ -91,52 +90,52 @@ struct WatchtowerApp: App {
                 let isBrowserFocused = activeViewModel?.contextualPane is BrowserPaneModel
 
                 Button("Go Back") {
-                    if let browser = activeViewModel?.contextualPane as? BrowserPaneModel,
-                       let window = NSApp.keyWindow,
-                       let contentView = window.contentView,
-                       let webView = findWebView(for: browser.id, in: contentView) {
-                        webView.goBack()
+                    if let browser = activeViewModel?.contextualPane as? BrowserPaneModel {
+                        browser.goBack()
                     }
                 }
                 .keyboardShortcut("[", modifiers: [.command])
                 .disabled(!isBrowserFocused)
 
                 Button("Go Forward") {
-                    if let browser = activeViewModel?.contextualPane as? BrowserPaneModel,
-                       let window = NSApp.keyWindow,
-                       let contentView = window.contentView,
-                       let webView = findWebView(for: browser.id, in: contentView) {
-                        webView.goForward()
+                    if let browser = activeViewModel?.contextualPane as? BrowserPaneModel {
+                        browser.goForward()
                     }
                 }
                 .keyboardShortcut("]", modifiers: [.command])
                 .disabled(!isBrowserFocused)
 
                 Button("Reload Page") {
-                    if let browser = activeViewModel?.contextualPane as? BrowserPaneModel,
-                       let window = NSApp.keyWindow,
-                       let contentView = window.contentView,
-                       let webView = findWebView(for: browser.id, in: contentView) {
-                        webView.reload()
+                    if let browser = activeViewModel?.contextualPane as? BrowserPaneModel {
+                        browser.reloadOrStop()
                     }
                 }
                 .keyboardShortcut("r", modifiers: [.command])
                 .disabled(!isBrowserFocused)
             }
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 }
 
 import WebKit
 
-/// Walk the view hierarchy to find a WatchtowerWebView associated with a pane ID.
-func findWebView(for paneId: UUID, in view: NSView) -> WatchtowerWebView? {
+/// Walk the view hierarchy to find a BrowserEngineView associated with a pane ID.
+/// Checks for both WatchtowerWebView (WebKit) and ChromiumBrowserView (Chromium).
+func findBrowserEngineView(for paneId: UUID, in view: NSView) -> (any BrowserEngineView)? {
     if let webView = view as? WatchtowerWebView,
        webView.browser?.id == paneId {
         return webView
     }
+    if let chromiumView = view as? ChromiumBrowserView,
+       chromiumView.browser?.id == paneId {
+        return chromiumView
+    }
     for subview in view.subviews {
-        if let found = findWebView(for: paneId, in: subview) {
+        if let found = findBrowserEngineView(for: paneId, in: subview) {
             return found
         }
     }
@@ -147,6 +146,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize the history store early so pruning runs at startup.
         _ = HistoryStore.shared
+
+        // Start the IPC server for CLI communication.
+        IPCServer.shared.start()
 
         // Set dark appearance at the app level so all windows (including
         // the titlebar chrome, traffic lights, and title text) render
@@ -232,6 +234,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - App Quit Confirmation
+
+    func applicationWillTerminate(_ notification: Notification) {
+        IPCServer.shared.stop()
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let hasActive = NSApp.windows.contains { windowHasActiveSessions($0) }

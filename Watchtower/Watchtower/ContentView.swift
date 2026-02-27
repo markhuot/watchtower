@@ -70,6 +70,12 @@ struct ContentView: View {
         }
         .background(appManager.backgroundColor.ignoresSafeArea())
         .focusedSceneValue(\.paneViewModel, viewModel)
+        .onAppear {
+            IPCServer.shared.register(viewModel)
+        }
+        .onDisappear {
+            IPCServer.shared.unregister(viewModel)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .ghosttySurfaceClosed)) { notification in
             if let view = notification.object as? GhosttyTerminalNSView {
                 viewModel.removePane(byId: view.terminal.id)
@@ -220,9 +226,30 @@ struct PaneWithHandle: View {
         return pane.paneWidth
     }
 
+    /// Standard gap width between panes (3px indicator + 12px padding each side).
+    private static let standardGapWidth: CGFloat = 27
+
+    /// Narrow gap width used between two neighboring collapsed panes.
+    private static let collapsedGapWidth: CGFloat = 15
+
     /// The current index of this pane in the array.
     private var index: Int {
         allPanes.firstIndex(where: { $0.id == pane.id }) ?? 0
+    }
+
+    /// The width of the gap to the right of this pane.
+    /// When both this pane and the next pane are collapsed, the gap narrows
+    /// to reduce visual clutter. During a drag reorder the gaps expand back
+    /// to full width so drop targets are easy to hit.
+    private var rightGapWidth: CGFloat {
+        let isDragging = viewModel.draggedPaneId != nil
+        if !isDragging,
+           pane.isCollapsed,
+           index + 1 < allPanes.count,
+           allPanes[index + 1].isCollapsed {
+            return Self.collapsedGapWidth
+        }
+        return Self.standardGapWidth
     }
 
     /// Whether the left-edge drop indicator should be shown for this pane.
@@ -263,6 +290,13 @@ struct PaneWithHandle: View {
                     viewModel.dragStarted(paneId: pane.id)
                 }, onHeaderTapped: {
                     viewModel.focusPane(id: pane.id)
+                }, onHeaderDoubleTapped: {
+                    if pane.isCollapsed {
+                        viewModel.focusPane(id: pane.id)
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            pane.isCollapsed = false
+                        }
+                    }
                 })
                 .frame(width: effectiveWidth)
                 .animation(nil, value: pane.paneWidth)
@@ -320,7 +354,8 @@ struct PaneWithHandle: View {
                             }
                     )
             }
-            .frame(width: 27) // 3px indicator + 12px padding each side
+            .frame(width: rightGapWidth)
+            .animation(.easeInOut(duration: 0.2), value: rightGapWidth)
         }
     }
 }
@@ -676,9 +711,11 @@ class PaneContainerViewModel: ObservableObject {
         let locationInWindow = event.locationInWindow
         guard let hitView = window.contentView?.hitTest(locationInWindow) else { return }
 
-        // Check if the hit view is (or is inside) a WKWebView. If not, the
-        // parent horizontal ScrollView handles scrolling natively.
-        guard hitView.isOrHasAncestor(ofType: WKWebView.self) else { return }
+        // Check if the hit view is (or is inside) a WKWebView or
+        // ChromiumBrowserView. If not, the parent horizontal ScrollView
+        // handles scrolling natively.
+        guard hitView.isOrHasAncestor(ofType: WKWebView.self) ||
+              hitView.isOrHasAncestor(ofType: ChromiumBrowserView.self) else { return }
 
         // Find the parent horizontal NSScrollView (the one backing
         // SwiftUI's ScrollView(.horizontal)).
@@ -715,12 +752,13 @@ class PaneContainerViewModel: ObservableObject {
         var current: NSView? = view
         while let v = current {
             if let sv = v as? NSScrollView {
-                // WKWebView contains internal NSScrollViews — skip those.
-                // The parent horizontal scroll view is the one whose
-                // hasHorizontalScroller is true or whose documentView
-                // is wider than the clip view (SwiftUI sets this up).
+                // WKWebView and ChromiumBrowserView contain internal
+                // NSScrollViews — skip those. The parent horizontal scroll
+                // view is the one whose documentView is wider than the clip
+                // view (SwiftUI sets this up).
                 let isWebKitInternal = sv.isOrHasAncestor(ofType: WKWebView.self)
-                if !isWebKitInternal {
+                let isChromiumInternal = sv.isOrHasAncestor(ofType: ChromiumBrowserView.self)
+                if !isWebKitInternal && !isChromiumInternal {
                     return sv
                 }
             }
@@ -931,19 +969,22 @@ class PaneContainerViewModel: ObservableObject {
     }
 
     @discardableResult
-    func addTerminal() -> TerminalPaneModel {
+    func addTerminal(directory: String? = nil, initialInput: String? = nil) -> TerminalPaneModel {
         // Inherit the working directory and pane width from the contextual
         // pane, falling back to defaults when nothing is focused.
         let sourcePane = contextualPane
-        let directory = sourcePane?.directory ?? NSHomeDirectory()
+        let resolvedDirectory = directory
+            ?? sourcePane?.directory
+            ?? NSHomeDirectory()
         let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
 
         let terminal = TerminalPaneModel(
             id: UUID(),
             title: "Terminal \(panes.count + 1)",
             status: .active,
-            directory: directory,
-            paneWidth: paneWidth
+            directory: resolvedDirectory,
+            paneWidth: paneWidth,
+            initialInput: initialInput
         )
         terminal.viewModel = self
 
@@ -959,11 +1000,11 @@ class PaneContainerViewModel: ObservableObject {
     }
 
     @discardableResult
-    func addBrowser(url: URL = URL(string: "about:blank")!) -> BrowserPaneModel {
+    func addBrowser(url: URL = URL(string: "about:blank")!, engine: BrowserEngine? = nil) -> BrowserPaneModel {
         let sourcePane = contextualPane
         let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
 
-        let browser = BrowserPaneModel(url: url, paneWidth: paneWidth)
+        let browser = BrowserPaneModel(url: url, paneWidth: paneWidth, engine: engine ?? WatchtowerConfig.shared.browserEngine)
         browser.viewModel = self
 
         // Insert after the contextual pane, or append at the end if none is focused
@@ -1070,7 +1111,8 @@ class PaneContainerViewModel: ObservableObject {
     }
 
     /// Resize all panes so they fit side-by-side within the window width.
-    /// Accounts for outer padding, drop indicators, and inter-pane gaps.
+    /// Accounts for outer padding, drop indicators, inter-pane gaps,
+    /// and collapsed panes (which occupy a fixed narrow width).
     func fitPanesToWindow() {
         guard !panes.isEmpty else { return }
         guard let window = NSApp.keyWindow,
@@ -1078,16 +1120,38 @@ class PaneContainerViewModel: ObservableObject {
 
         let windowWidth = contentView.frame.width
 
-        // Layout budget:
+        // Compute the total gap/chrome budget by walking the pane list.
         //   outer padding: 10 left + 10 right = 20
-        //   first-pane left drop indicator: 27
-        //   each pane's right gap (resize handle): 27 × paneCount
-        let paneCount = CGFloat(panes.count)
-        let chrome: CGFloat = 20 + 27 + 27 * paneCount
-        let available = windowWidth - chrome
-        let perPane = max(200, available / paneCount)  // respect minimum width
+        //   first-pane left drop indicator: 27 (standardGapWidth)
+        //   each pane's right gap: 27 normally, but 15 when both this
+        //   pane and the next pane are collapsed.
+        let standardGap: CGFloat = 27
+        let collapsedGap: CGFloat = 15
+        var chrome: CGFloat = 20 + standardGap  // outer padding + left indicator
+        for (i, pane) in panes.enumerated() {
+            // Each pane contributes a right-side gap
+            if pane.isCollapsed,
+               i + 1 < panes.count,
+               panes[i + 1].isCollapsed {
+                chrome += collapsedGap
+            } else {
+                chrome += standardGap
+            }
+        }
 
-        for pane in panes {
+        // Subtract the fixed width of collapsed panes from the available space.
+        let collapsedWidth = CGFloat(panes.filter { $0.isCollapsed }.count) * PaneModel.collapsedPaneWidth
+        let expandedPanes = panes.filter { !$0.isCollapsed }
+        let available = windowWidth - chrome - collapsedWidth
+
+        if expandedPanes.isEmpty {
+            // All panes are collapsed — nothing to resize.
+            return
+        }
+
+        let perPane = max(200, available / CGFloat(expandedPanes.count))
+
+        for pane in expandedPanes {
             pane.paneWidth = perPane
         }
     }
@@ -1192,22 +1256,26 @@ class PaneContainerViewModel: ObservableObject {
                 return true
             }
         } else if pane is BrowserPaneModel {
-            if let webView = findWebView(for: pane.id, in: contentView) {
-                window.makeFirstResponder(webView)
+            if let engineView = findBrowserEngineView(for: pane.id, in: contentView) {
+                window.makeFirstResponder(engineView)
                 return true
             }
         }
         return false
     }
 
-    /// Walk the view hierarchy to find a WatchtowerWebView associated with a pane ID.
-    private func findWebView(for paneId: UUID, in view: NSView) -> WatchtowerWebView? {
+    /// Walk the view hierarchy to find a BrowserEngineView associated with a pane ID.
+    private func findBrowserEngineView(for paneId: UUID, in view: NSView) -> (any BrowserEngineView)? {
         if let webView = view as? WatchtowerWebView,
            webView.browser?.id == paneId {
             return webView
         }
+        if let chromiumView = view as? ChromiumBrowserView,
+           chromiumView.browser?.id == paneId {
+            return chromiumView
+        }
         for subview in view.subviews {
-            if let found = findWebView(for: paneId, in: subview) {
+            if let found = findBrowserEngineView(for: paneId, in: subview) {
                 return found
             }
         }

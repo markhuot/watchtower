@@ -26,5 +26,13 @@ ghostty/zig-out/
 ghostty/zig-cache/
 ghostty/.zig-cache/
 
+# Chromium Embedded Framework (downloaded during setup)
+chromium/
+
 # Temporary working files (session exports, etc.)
 .tmp/
+
+# CLI dependencies
+cli/node_modules/
+cli/bun.lockb
+cli/watchtower

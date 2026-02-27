@@ -596,22 +596,249 @@ CEF has its own sandbox support separate from macOS App Sandbox. Since Watchtowe
 19. **Appearance syncing** — implement dark/light theme sync via CEF DevTools Protocol.
 20. **Testing** — verify both engines produce the same `BrowserPaneModel` state for identical navigations. Test focus management, Cmd+W, Cmd+Shift+[/], scroll forwarding, downloads, form interaction detection, dark mode, and per-pane engine switching with both engines.
 
+## Current Implementation Status
+
+> **Last updated:** 2026-02-26
+>
+> The Chromium/CEF integration is functional — Chromium browser panes render pages and all helper processes spawn correctly. However, several CEF handler callbacks were stripped to reach a minimal working state. This section documents exactly what is done, what remains, and the critical technical knowledge needed to continue.
+
+### What Is Complete (Working)
+
+All infrastructure and the core rendering pipeline are done:
+
+| Step | Status | Notes |
+|------|--------|-------|
+| 1. Config infrastructure (`WatchtowerConfig.swift`) | **Done** | Reads/writes `~/.config/watchtower/config.json` |
+| 2. `BrowserEngine` enum | **Done** | In `BrowserEngine.swift` |
+| 3. `SettingsView` | **Done** | General tab with engine picker |
+| 4. `BrowserEngineView` protocol | **Done** | In `BrowserEngineView.swift`. `WatchtowerWebView` conforms. `isInspectable` removed from protocol (requires macOS 13.3+), guarded with `if #available` at call site instead. |
+| 5. `BrowserWebView` → `WebKitBrowserView` | **Done** | Struct renamed in `BrowserWebView.swift` |
+| 6. `engine` property on `BrowserPaneModel` | **Done** | `@Published var engine: BrowserEngine` with `switchEngine(to:)` |
+| 7. Command palette engine switching | **Done** | "Switch to Chromium/WebKit" in `CommandPaletteView.swift` |
+| 8. View routing in `TerminalPaneView` | **Done** | Branches on `browser.engine` |
+| 9. CEF integration (build) | **Done** | CEF framework linked/embedded, helper target, bridging header, search paths |
+| 10. `ChromiumManager` singleton | **Done** | Init, message pump (60Hz Timer), shutdown |
+| 11. `ChromiumBrowserView` (NSView) | **Partial** | Core works: loadRequest, goBack/Forward/Reload/Stop, focus, key equiv passthrough, performClose. Appearance sync (`syncAppearance`) implemented but crashes — currently disabled with early return. Missing: collapsed-pane key handling (Feature G). |
+| 12. CEF client handlers | **Partial** | Life span handler, load handler (A), display handler (B), progress timer (C) all working. DevTools observer for form detection (E) implemented but disabled pending Feature D fix. Missing: download handler (F). |
+| 13. `ChromiumBrowserRepresentable` | **Done** | Uses `cef_browser_host_create_browser_sync`. Generation-based navigation. |
+| 16. Scroll forwarding | **Done** | `ContentView.swift` checks `ChromiumBrowserView` in addition to `WKWebView` |
+| 17. `findBrowserEngineView` utility | **Done** | Updated in `ContentView.swift` |
+
+### What Remains (Stripped/Missing)
+
+These features were deliberately stripped to achieve a minimal working render. They should be re-enabled one at a time, building and testing after each:
+
+#### A. Load Handler (`cef_load_handler_t`) — DONE
+
+**File:** `CEFClientHandlers.swift`
+
+Implemented and verified working. Callbacks: `on_loading_state_change` (isLoading, canGoBack, canGoForward), `on_load_start` (progress, form reset, status reset), `on_load_end` (progress=1.0, httpStatusCode, history recording), `on_load_error` (with ERR_ABORTED/-3 filtering via `errorCode.rawValue`).
+
+#### B. Display Handler (`cef_display_handler_t`) — DONE
+
+**File:** `CEFClientHandlers.swift`
+
+Implemented and verified working. Callbacks: `on_title_change` (pageTitle) and `on_address_change` (URL, main frame only).
+
+#### C. Progress Estimation Timer — DONE
+
+**File:** `CEFClientHandlers.swift` (on `CEFClientContext`)
+
+Implemented and verified working. Timer stored on `CEFClientContext.progressTimer`. Started in `on_load_start` (0.5s interval, increments by 0.1 up to 0.9), stopped in both `on_load_end` and `on_load_error`. Timer must be started/stopped on `DispatchQueue.main` since `Timer.scheduledTimer` requires a run loop.
+
+#### D. Appearance Syncing — CRASHES APP (currently disabled)
+
+**File:** `ChromiumBrowserView.swift` and `ChromiumBrowserRepresentable.swift`
+
+Implementation exists but causes the app to crash when a Chromium browser pane is opened. The window appears briefly then closes immediately. When `syncAppearance(isDark:)` is disabled with an early return, the crash goes away and everything works.
+
+The implementation uses DevTools Protocol `Emulation.setEmulatedMedia` with `features: [{name: "prefers-color-scheme", value: "dark"|"light"}]` via `cef_browser_host_t.execute_dev_tools_method`. It builds CEF dictionary/list value objects (`cef_dictionary_value_create`, `cef_list_value_create`) for the params.
+
+`syncAppearance` is called from two places:
+1. `ChromiumBrowserView.loadPendingURLIfNeeded()` — called by `on_after_created` when the browser is first ready
+2. `ChromiumBrowserRepresentable.updateNSView` — called on theme changes, with `lastSyncedIsDark` on Coordinator for change detection
+
+**Needs investigation:** The crash is likely caused by calling `execute_dev_tools_method` too early (before the browser is fully initialized), or by incorrect CEF value object construction/lifetime, or by threading issues. The `syncAppearance` in `loadPendingURLIfNeeded` fires immediately after `on_after_created`, which may be too soon for DevTools protocol calls.
+
+#### E. Form Interaction JS Injection — IMPLEMENTED BUT DISABLED
+
+**File:** `CEFClientHandlers.swift`
+
+Implementation exists using DevTools Protocol `Runtime.addBinding` approach (not the document title hack):
+1. `cefSetupDevToolsObserver` — registers a `cef_dev_tools_message_observer_t` via `host.add_dev_tools_message_observer` and calls `Runtime.addBinding` with binding name `"watchtowerFormInteraction"`.
+2. `cefInjectFormDetectionJS` — injects form detection JS in `on_load_end` via `cef_frame_t.execute_java_script`. The JS listens for input/textarea/select events and calls `watchtowerFormInteraction("formInteraction")`.
+3. Observer's `on_dev_tools_event` callback receives `Runtime.bindingCalled` events and sets `hasInteractedForms = true`.
+
+Currently disabled with early returns/comments for debugging. Was disabled while bisecting the crash, but Feature E is NOT the crash cause — the crash is caused by Feature D. Once Feature D is fixed, Feature E can be re-enabled.
+
+Key details: `cef_dev_tools_message_observer_t` is allocated client-side via `cefCreate()`. `add_dev_tools_message_observer` returns a `cef_registration_t*` that must be held alive. The `on_dev_tools_event` callback receives `method` as `cef_string_t*` and `params` as `const void*` (UTF-8 JSON bytes) with `params_size`. The header `cef_devtools_message_observer_capi.h` is transitively included via `cef_browser_capi.h`.
+
+#### F. Download Handler (`cef_download_handler_t`) — LOW PRIORITY
+
+**File:** `CEFClientHandlers.swift`
+
+Callbacks needed:
+- **`on_before_download(browser, downloadItem, suggestedName, callback)`** — Show `NSSavePanel`, call `callback.pointee.cont(callback, path, showDialog=0)` with the chosen path.
+- **`on_download_updated(browser, downloadItem, callback)`** — Optional: track progress, handle completion/failure.
+
+Wire into `cef_client_t` via `get_download_handler`.
+
+#### G. Key Event Handling for Collapsed Panes — LOW PRIORITY
+
+**File:** `ChromiumBrowserView.swift`
+
+Currently missing `keyDown(with:)` and `keyUp(with:)` overrides that match `WatchtowerWebView`'s behavior:
+- When collapsed, swallow all key events
+- Enter/Return/Space expands the pane
+- `keyUp` is also swallowed when collapsed
+
+### Technical Knowledge for Continuing
+
+#### CEF C API Patterns Used in This Codebase
+
+**Struct allocation:** All client-side CEF structs are allocated via `cefCreate<T>()` in `CEFHelpers.swift`. This handles the `cef_base_ref_counted_t` setup with atomic reference counting. The pattern:
+```swift
+let handler: UnsafeMutablePointer<cef_load_handler_t> = cefCreate()
+handler.pointee.on_loading_state_change = { (selfPtr, browser, isLoading, canGoBack, canGoForward) in
+    // ... callback implementation
+}
+```
+
+**Handler → Context lookup:** CEF C callbacks receive only `selfPtr` (the handler struct pointer). The codebase uses two global dictionaries in `CEFClientHandlers.swift`:
+- `contextRegistry` maps client pointers → `CEFClientContext`
+- `handlerToContext` maps handler pointers → `CEFClientContext`
+
+When creating a new handler, register it: `cefRegisterHandler(UnsafeMutableRawPointer(handler), context: context)`
+
+Then in callbacks: `guard let ctx = cefContextForHandler(UnsafeMutableRawPointer(selfPtr)) else { return }`
+
+**String conversion:** Use `cefStringToSwift(_:)` to convert `cef_string_t` or `UnsafePointer<cef_string_t>?` to Swift `String`. Use `withCEFString(_:body:)` to create temporary `cef_string_t` values.
+
+**Main frame check:** CEF callbacks fire for all frames (main + iframes). Filter with:
+```swift
+guard let frame = browser?.pointee.get_main_frame?(browser!) else { return }
+let isMain = frame.pointee.is_main?(frame) ?? 0
+_ = frame.pointee.base.release?(&frame.pointee.base)
+guard isMain != 0 else { return }
+```
+
+Or compare frame identifiers if you have the frame pointer from the callback.
+
+**DispatchQueue.main.async:** All `BrowserPaneModel` property updates from CEF callbacks must be dispatched to the main queue (CEF callbacks may fire on background threads):
+```swift
+DispatchQueue.main.async {
+    ctx.browserModel?.isLoading = isLoading != 0
+}
+```
+
+#### Wiring a New Handler Into the Client
+
+To add a new handler (e.g., load handler), follow this pattern:
+
+1. **Create the factory function** (e.g., `cefMakeLoadHandler(context:)`) — allocates via `cefCreate()`, sets callback function pointers, returns the pointer.
+
+2. **Add storage to `CEFClientContext`** — e.g., `var loadHandler: UnsafeMutablePointer<cef_load_handler_t>?`
+
+3. **Register the handler** in `cefMakeClient(context:)`:
+```swift
+let lh = cefMakeLoadHandler(context: context)
+context.loadHandler = lh
+cefRegisterHandler(UnsafeMutableRawPointer(lh), context: context)
+```
+
+4. **Wire the getter** on the client:
+```swift
+client.pointee.get_load_handler = { (selfPtr) -> UnsafeMutablePointer<cef_load_handler_t>? in
+    guard let selfPtr = selfPtr else { return nil }
+    guard let ctx = contextRegistry[UnsafeMutableRawPointer(selfPtr)] else { return nil }
+    guard let handler = ctx.loadHandler else { return nil }
+    handler.pointee.base.add_ref?(&handler.pointee.base)
+    return handler
+}
+```
+
+5. **Cleanup** in `cefCleanupClientContext()` — unregister the handler pointer.
+
+6. **Release** in `CEFClientContext.deinit` — release the handler struct.
+
+#### Build & Test Procedure
+
+```bash
+# 1. Build
+xcodebuild -project Watchtower.xcodeproj -scheme Watchtower -configuration Debug build 2>&1 | tail -20
+
+# 2. Kill existing instances
+pkill -f Watchtower; pkill -f "Watchtower Helper"; sleep 2
+
+# 3. Clean singleton locks (CEF uses a process singleton lock — stale locks from killed processes block init)
+rm -f ~/Library/Application\ Support/Watchtower/CEF/SingletonLock \
+      ~/Library/Application\ Support/Watchtower/CEF/SingletonSocket \
+      ~/Library/Application\ Support/Watchtower/CEF/SingletonCookie
+
+# 4. Launch
+/Users/markhuot/Library/Developer/Xcode/DerivedData/Watchtower-hdvmmdolozizpchhfyhjyfxspgcs/Build/Products/Debug/Watchtower.app/Contents/MacOS/Watchtower > /Users/markhuot/Sites/eyes/.tmp/watchtower-stdout.log 2>&1 &
+
+# 5. Wait for CEF init (~8-10 seconds), then open a browser pane
+sleep 10
+cd /Users/markhuot/Sites/eyes/cli && bun run src/index.ts new browser https://example.com
+
+# 6. Check logs
+cat /Users/markhuot/Sites/eyes/.tmp/watchtower-stdout.log
+cat ~/Library/Application\ Support/Watchtower/CEF/chrome_debug.log
+```
+
+**Config file:** `~/.config/watchtower/config.json` must have `{"browser-engine": "chromium"}` for Chromium to be the default engine.
+
+#### Critical Gotchas
+
+1. **CEF `cef_api_hash()` must be called before `cef_initialize()`** — without it, `cef_api_version()` returns -1 and helper processes crash with `CefApp_0_CToCpp called with invalid version -1`.
+2. **Specialized helper binaries are required** — `Watchtower Helper (Renderer).app`, `(GPU).app`, `(Plugin).app`, `(Alerts).app`. Created by a shell script build phase.
+3. **Install name fix** — The framework's install name was changed to `@rpath/...` so helpers can find it from their different `@executable_path`.
+4. **Re-signing** — CEF's internal dylibs ship adhoc-signed. A build phase re-signs them with the app's identity.
+5. **`--disable-features=Fontations`** — Required. The Rust font backend crashes helper subprocesses.
+6. **Singleton lock** — If the app is killed, stale `SingletonLock`/`SingletonSocket`/`SingletonCookie` files in `~/Library/Application Support/Watchtower/CEF/` prevent the next launch from initializing CEF. Must be removed.
+7. **LSP false positives** — SourceKit reports errors for all `cef_*` types and cross-file types. These are false positives; the bridging header is only resolved during actual Xcode builds.
+8. **`multi_threaded_message_loop` is NOT supported on macOS** — must use `external_message_pump = 1`.
+9. **Sandbox is disabled** — `com.apple.security.app-sandbox = false`. `ENABLE_USER_SCRIPT_SANDBOXING = NO`.
+
+#### Known Issues
+
+1. **Click crash** — User reported a crash when clicking the rendered Chromium browser pane. Not yet investigated. Likely related to first responder handling or CEF's internal event processing.
+2. **Message pump efficiency** — Using a simple 60Hz Timer. The spec mentions `on_schedule_message_pump_work` for demand-driven pumping, but the timer works fine for now.
+
+#### Xcode Project ID Scheme
+
+PBXProj IDs use sequential human-readable IDs with prefix `AA`:
+- File refs: `AA00000200000000000000XX`
+- Build files: `AA00000100000000000000XX`
+- Product refs: `AA00000300000000000000XX`
+- Shell script build phases: `AA0000100000000000000001` (re-sign), `AA0000100000000000000002` (create helper variants)
+- **Highest suffix in use: `2F` (IPCServer.swift). Next available: `30`.**
+
 ## Files to Create or Modify
 
-| File | Action | Description |
-|---|---|---|
-| `WatchtowerConfig.swift` | Create | Config singleton: reads/writes `~/.config/watchtower/config.json` (JSON), exposes `@Published var browserEngine`. |
-| `BrowserEngine.swift` | Create | `BrowserEngine` enum (`webkit`, `chromium`) with display names and descriptions. |
-| `BrowserEngineView.swift` | Create | `BrowserEngineView` protocol defining the interface both engines implement. |
-| `SettingsView.swift` | Create | Settings window with General tab containing the engine picker, backed by `WatchtowerConfig`. |
-| `ChromiumManager.swift` | Create | Singleton for lazy CEF initialization, message loop integration, shutdown. |
-| `ChromiumBrowserView.swift` | Create | `ChromiumBrowserView` NSView subclass conforming to `BrowserEngineView`, with CEF browser management, focus tracking, key passthrough, Cmd+W. |
-| `ChromiumBrowserRepresentable.swift` | Create | `NSViewRepresentable` wrapper for `ChromiumBrowserView`, coordinator with CEF handler callbacks. |
-| `BrowserWebView.swift` | Rename/Modify | Rename to `WebKitBrowserView.swift`. Add `BrowserEngineView` conformance to `WatchtowerWebView`. Rename struct from `BrowserWebView` to `WebKitBrowserView`. |
-| `BrowserPaneModel.swift` | Modify | Change `webView: WKWebView?` to `engineView: (any BrowserEngineView)?`. Add `@Published var engine: BrowserEngine` with `switchEngine(to:)`. Update `goBack`/`goForward`/`reloadOrStop` to use protocol methods. |
-| `TerminalPaneView.swift` | Modify | Branch on `browser.engine` to render `WebKitBrowserView` or `ChromiumBrowserRepresentable`. |
-| `ContentView.swift` | Modify | Update scroll forwarding to detect `ChromiumBrowserView`. Update `findWebView` -> `findBrowserEngineView`. |
-| `WatchtowerApp.swift` | Modify | Add `Settings { SettingsView() }` scene. Update `findWebView` references. |
-| `CommandPaletteView.swift` | Modify | Add "Switch to Chromium" / "Switch to WebKit" contextual commands for browser panes. |
-| `GhosttyBridge.h` | Modify | Add `#include` for CEF C API headers. |
-| `Watchtower.xcodeproj` | Modify | Add new files, CEF framework, helper app targets, search paths. |
+| File | Action | Status | Description |
+|---|---|---|---|
+| `WatchtowerConfig.swift` | Create | **Done** | Config singleton: reads/writes `~/.config/watchtower/config.json` (JSON), exposes `@Published var browserEngine`. |
+| `BrowserEngine.swift` | Create | **Done** | `BrowserEngine` enum (`webkit`, `chromium`) with display names and descriptions. |
+| `BrowserEngineView.swift` | Create | **Done** | `BrowserEngineView` protocol defining the interface both engines implement. |
+| `SettingsView.swift` | Create | **Done** | Settings window with General tab containing the engine picker, backed by `WatchtowerConfig`. |
+| `ChromiumManager.swift` | Create | **Done** | Singleton for lazy CEF initialization, message loop integration, shutdown. |
+| `ChromiumBrowserView.swift` | Create | **Partial** | Core works (load, navigate, focus, key equiv, close). Appearance sync implemented but crashes — disabled with early return. Missing: collapsed-pane key handling. |
+| `ChromiumBrowserRepresentable.swift` | Create | **Done** | `NSViewRepresentable` wrapper using `cef_browser_host_create_browser_sync`. Appearance sync in `updateNSView` present but depends on `syncAppearance` which is disabled. |
+| `CEFHelpers.swift` | Create | **Done** | `CEFRefCount`, `cefCreate<T>()`, string conversion, userdata helpers. |
+| `CEFClientHandlers.swift` | Create | **Partial** | Life span, load, display handlers and progress timer all working. DevTools observer for form detection implemented but disabled. Missing: download handler. |
+| `CefApplication.swift` | Create | **Done** | `CefNSApplication` with CefAppProtocol conformance. |
+| `main.swift` | Create | **Done** | Entry point: NSApplication init, signal handlers, atexit, CEF eager init. |
+| `WatchtowerHelper/main.c` | Create | **Done** | Helper app entry point calling `cef_execute_process()`. |
+| `WatchtowerHelper/Info.plist` | Create | **Done** | Helper app Info.plist. |
+| `scripts/download-cef.sh` | Create | **Done** | Downloads CEF, restructures framework, fixes install name. |
+| `BrowserWebView.swift` | Rename/Modify | **Done** | Struct renamed to `WebKitBrowserView`. `WatchtowerWebView` conforms to `BrowserEngineView`. |
+| `BrowserPaneModel.swift` | Modify | **Done** | `engineView: (any BrowserEngineView)?`, `@Published var engine`, `switchEngine(to:)`. |
+| `TerminalPaneView.swift` | Modify | **Done** | Branches on `browser.engine`. |
+| `ContentView.swift` | Modify | **Done** | Scroll forwarding + `findBrowserEngineView` both check `ChromiumBrowserView`. |
+| `WatchtowerApp.swift` | Modify | **Done** | `@main` removed (moved to `main.swift`), `Settings` scene added. |
+| `CommandPaletteView.swift` | Modify | **Done** | "Switch to Chromium/WebKit" commands. |
+| `GhosttyBridge.h` | Modify | **Done** | CEF C API headers + `cef_api_hash.h` + `cef_values_capi.h`. |
+| `Info.plist` | Modify | **Done** | `NSPrincipalClass` → `$(PRODUCT_MODULE_NAME).CefNSApplication`. |
+| `Watchtower.xcodeproj` | Modify | **Done** | All files, framework, helper target, build phases, search paths. |

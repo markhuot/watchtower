@@ -39,6 +39,11 @@ class PaneModel: Identifiable, ObservableObject {
     @Published var isDragging: Bool = false
     @Published var isCollapsed: Bool = false
 
+    /// Whether the bell/alert has been rung and not yet acknowledged.
+    /// Set to `true` when the terminal rings the bell. Cleared after
+    /// the pane has been focused for 1 second.
+    @Published var hasBell: Bool = false
+
     /// Weak reference to the parent view model, used by NSViews to check
     /// `pendingFocus` in `viewDidMoveToWindow`. Set when the pane is added
     /// to the view model's `panes` array.

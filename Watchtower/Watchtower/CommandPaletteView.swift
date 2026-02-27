@@ -228,29 +228,31 @@ struct CommandPaletteView: View {
         // Browser-specific commands (only when browser pane is focused)
         if isBrowserFocused {
             items.append(.builtIn(name: "Go Back", shortcut: "\u{2318}[") { vm in
-                if let browser = vm.contextualPane as? BrowserPaneModel,
-                   let window = NSApp.keyWindow,
-                   let contentView = window.contentView,
-                   let webView = findWebView(for: browser.id, in: contentView) {
-                    webView.goBack()
+                if let browser = vm.contextualPane as? BrowserPaneModel {
+                    browser.goBack()
                 }
             })
             items.append(.builtIn(name: "Go Forward", shortcut: "\u{2318}]") { vm in
-                if let browser = vm.contextualPane as? BrowserPaneModel,
-                   let window = NSApp.keyWindow,
-                   let contentView = window.contentView,
-                   let webView = findWebView(for: browser.id, in: contentView) {
-                    webView.goForward()
+                if let browser = vm.contextualPane as? BrowserPaneModel {
+                    browser.goForward()
                 }
             })
             items.append(.builtIn(name: "Reload Page", shortcut: "\u{2318}R") { vm in
-                if let browser = vm.contextualPane as? BrowserPaneModel,
-                   let window = NSApp.keyWindow,
-                   let contentView = window.contentView,
-                   let webView = findWebView(for: browser.id, in: contentView) {
-                    webView.reload()
+                if let browser = vm.contextualPane as? BrowserPaneModel {
+                    browser.reloadOrStop()
                 }
             })
+
+            // Engine switching — show option to switch to the OTHER engine
+            if let browser = viewModel.contextualPane as? BrowserPaneModel {
+                let currentEngine = browser.engine
+                let targetEngine: BrowserEngine = currentEngine == .webkit ? .chromium : .webkit
+                items.append(.builtIn(name: "Switch to \(targetEngine.displayName)") { vm in
+                    if let browser = vm.contextualPane as? BrowserPaneModel {
+                        browser.switchEngine(to: targetEngine)
+                    }
+                })
+            }
         }
 
         // Project actions

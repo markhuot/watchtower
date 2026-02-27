@@ -20,6 +20,9 @@ struct PaneView: View {
 
     /// Called when the title bar is clicked (to focus the pane).
     var onHeaderTapped: (() -> Void)? = nil
+
+    /// Called when the title bar is double-clicked (to expand a collapsed pane).
+    var onHeaderDoubleTapped: (() -> Void)? = nil
     
     private let cornerRadius: CGFloat = 6
 
@@ -47,8 +50,13 @@ struct PaneView: View {
     }
 
     /// The border color for the focus highlight, accounting for window activation state.
+    /// When `hasBell` is true, the border uses the theme's bright red (palette 9).
+    /// The `.animation` modifier on the parent handles the smooth transition between
+    /// bell red and the normal highlight blue.
     private var highlightBorderColor: Color {
-        if isHighlightActive {
+        if pane.hasBell {
+            return appManager.bellColor
+        } else if isHighlightActive {
             return appManager.highlightColor
         } else if isHighlightDimmed {
             return appManager.highlightColor.opacity(0.3)
@@ -61,6 +69,9 @@ struct PaneView: View {
     private var highlightShadowColor: Color {
         if pane.isCollapsed {
             return Color.clear  // no glow on collapsed panes — too narrow
+        }
+        if pane.hasBell {
+            return appManager.bellColor.opacity(0.6)
         }
         if isHighlightActive {
             return appManager.highlightColor.opacity(0.6)
@@ -133,7 +144,12 @@ struct PaneView: View {
                         GhosttyTerminalView(terminal: terminal, size: geo.size)
                     }
                 } else if let browser = pane as? BrowserPaneModel {
-                    BrowserWebView(browser: browser)
+                    switch browser.engine {
+                    case .webkit:
+                        WebKitBrowserView(browser: browser)
+                    case .chromium:
+                        ChromiumBrowserRepresentable(browser: browser)
+                    }
                 }
             }
             .frame(width: pane.isCollapsed ? PaneModel.collapsedPaneWidth : nil)
@@ -147,7 +163,8 @@ struct PaneView: View {
                     pane: pane,
                     onClose: onClose,
                     onDragStarted: onDragStarted,
-                    onHeaderTapped: onHeaderTapped
+                    onHeaderTapped: onHeaderTapped,
+                    onHeaderDoubleTapped: onHeaderDoubleTapped
                 )
             }
 
@@ -186,6 +203,7 @@ struct PaneView: View {
         .animation(.easeInOut(duration: 0.15), value: pane.isFocused)
         .animation(.easeInOut(duration: 0.15), value: controlActiveState)
         .animation(.easeInOut(duration: 0.15), value: pane.isDragging)
+        .animation(.easeInOut(duration: 0.15), value: pane.hasBell)
         .animation(.easeOut(duration: 0.15), value: viewModel.commandPalettePaneId)
         .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
     }
@@ -202,6 +220,7 @@ struct CollapsedPaneContent: View {
     var onClose: (() -> Void)? = nil
     var onDragStarted: (() -> Void)? = nil
     var onHeaderTapped: (() -> Void)? = nil
+    var onHeaderDoubleTapped: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -242,7 +261,8 @@ struct CollapsedPaneContent: View {
             DragSourceView(
                 pane: pane,
                 onDragStarted: onDragStarted,
-                onClicked: onHeaderTapped
+                onClicked: onHeaderTapped,
+                onDoubleClicked: onHeaderDoubleTapped
             )
         )
     }
@@ -439,12 +459,14 @@ struct DragSourceView: NSViewRepresentable {
     let pane: PaneModel
     var onDragStarted: (() -> Void)?
     var onClicked: (() -> Void)?
+    var onDoubleClicked: (() -> Void)?
 
     func makeNSView(context: Context) -> DragSourceNSView {
         let view = DragSourceNSView()
         view.pane = pane
         view.onDragStarted = onDragStarted
         view.onClicked = onClicked
+        view.onDoubleClicked = onDoubleClicked
         return view
     }
 
@@ -452,6 +474,7 @@ struct DragSourceView: NSViewRepresentable {
         nsView.pane = pane
         nsView.onDragStarted = onDragStarted
         nsView.onClicked = onClicked
+        nsView.onDoubleClicked = onDoubleClicked
     }
 }
 
@@ -459,6 +482,7 @@ class DragSourceNSView: NSView, NSDraggingSource {
     var pane: PaneModel!
     var onDragStarted: (() -> Void)?
     var onClicked: (() -> Void)?
+    var onDoubleClicked: (() -> Void)?
 
     /// Minimum distance in points before a drag begins.
     private let dragThreshold: CGFloat = 5.0
@@ -514,7 +538,11 @@ class DragSourceNSView: NSView, NSDraggingSource {
         // If we get a mouseUp without having started a drag, it's a click
         if mouseDownLocation != nil {
             mouseDownLocation = nil
-            onClicked?()
+            if event.clickCount == 2 {
+                onDoubleClicked?()
+            } else {
+                onClicked?()
+            }
         }
     }
 

@@ -46,6 +46,7 @@ All under `Watchtower/Watchtower/`:
 | `ActionDiscovery.swift` | Discovers action scripts in .watchtower/actions/ and ~/.config/watchtower/actions/ |
 | `ActionDialogView.swift` | SwiftUI dialog for action arguments with async default/options resolution |
 | `WordList.swift` | Word list utility (used for workspace name generation) |
+| `IPCServer.swift` | Unix domain socket server for CLI↔app IPC, view model registry, command handlers |
 
 ## Xcode Project
 
@@ -151,3 +152,41 @@ Never read from or write to `/tmp` or any system temporary directory. If you nee
 - Build succeeds (both ghostty lib and Watchtower app)
 - App sandbox is enabled with network client access; PTY spawning may need entitlement changes
 - There are old `Eyes/` source files in the repo that should be ignored (the active code is in `Watchtower/Watchtower/`)
+
+## CLI (Bun/TypeScript)
+
+Located in `cli/` at the project root. Communicates with the running Watchtower app via Unix domain socket IPC.
+
+### Build & Run
+
+```bash
+cd cli && bun install          # install deps (first time)
+bun run src/index.ts --help    # run directly
+bun build --compile src/index.ts --outfile watchtower  # compile to standalone binary
+```
+
+### Commands
+
+- `watchtower new terminal [--directory <path>] [--command <cmd>]` — open a new terminal pane adjacent to the calling pane
+- `watchtower new browser <url>` — open a new browser pane adjacent to the calling pane
+
+### IPC Protocol
+
+- Socket path: `~/.config/watchtower/watchtower.sock`
+- JSON request/response over Unix domain socket
+- Pane identification: `WATCHTOWER_PANE_ID` env var (UUID) is injected into every terminal surface by `GhosttyTerminalView.setupView()`
+- Request format: `{"command": "new-terminal", "paneId": "<uuid>", "directory": "...", "command": "..."}`
+- Response format: `{"success": true}` or `{"success": false, "error": "..."}`
+
+### Source Files
+
+| File | Purpose |
+|---|---|
+| `cli/src/index.ts` | Entry point, subcommand routing |
+| `cli/src/ipc.ts` | Unix domain socket client, `sendCommand()`, `getPaneId()` |
+| `cli/src/commands/new-terminal.ts` | `watchtower new terminal` command |
+| `cli/src/commands/new-browser.ts` | `watchtower new browser` command |
+
+### Xcode Project ID Scheme
+
+Sequential human-readable IDs with prefix `AA`. Next available suffix: `0030`. Used suffixes: `002F` (IPCServer.swift build file and file reference).

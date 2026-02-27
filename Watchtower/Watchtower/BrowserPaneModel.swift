@@ -12,9 +12,13 @@ class BrowserPaneModel: PaneModel {
     @Published var httpStatusCode: Int? = nil
     @Published var hasInteractedForms: Bool = false
 
-    /// Weak reference to the underlying WKWebView, set by BrowserWebView.makeNSView.
+    /// The rendering engine used by this browser pane.
+    @Published var engine: BrowserEngine
+
+    /// Weak reference to the underlying engine NSView (WatchtowerWebView or
+    /// ChromiumBrowserView), set by the NSViewRepresentable's makeNSView.
     /// Used by the header back/forward buttons to trigger navigation directly.
-    weak var webView: WKWebView?
+    weak var engineView: (any BrowserEngineView)?
 
     /// How the current navigation was initiated. Set before navigating,
     /// consumed and reset to "navigation" after the visit is recorded.
@@ -57,8 +61,9 @@ class BrowserPaneModel: PaneModel {
         return windowWidth * 0.8
     }
 
-    init(url: URL = URL(string: "about:blank")!, paneWidth: CGFloat = PaneModel.defaultPaneWidth) {
+    init(url: URL = URL(string: "about:blank")!, paneWidth: CGFloat = PaneModel.defaultPaneWidth, engine: BrowserEngine = WatchtowerConfig.shared.browserEngine) {
         self.url = url
+        self.engine = engine
         super.init(id: UUID(), paneWidth: paneWidth)
         // If the initial URL is not about:blank, mark generation 1 so
         // makeNSView's initial load is recognized.
@@ -77,20 +82,29 @@ class BrowserPaneModel: PaneModel {
 
     /// Navigate back in the web view's history.
     func goBack() {
-        webView?.goBack()
+        engineView?.goBack()
     }
 
     /// Navigate forward in the web view's history.
     func goForward() {
-        webView?.goForward()
+        engineView?.goForward()
     }
 
     /// Reload the current page, or stop loading if a load is in progress.
     func reloadOrStop() {
         if isLoading {
-            webView?.stopLoading()
+            engineView?.stopLoading()
         } else {
-            webView?.reload()
+            engineView?.reload()
         }
+    }
+
+    /// Switch this pane to a different rendering engine. Clears the current
+    /// engine view reference so the SwiftUI view layer re-creates it with
+    /// the new engine.
+    func switchEngine(to newEngine: BrowserEngine) {
+        guard newEngine != engine else { return }
+        engineView = nil
+        engine = newEngine
     }
 }

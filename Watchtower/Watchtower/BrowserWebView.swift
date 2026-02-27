@@ -57,8 +57,29 @@ enum BrowserConfiguration {
 /// Custom WKWebView subclass that participates in the app's focus tracking
 /// and lets app-level keyboard shortcuts (like Cmd+Shift+[/]) pass through
 /// to the menu system instead of being consumed by WebKit.
-class WatchtowerWebView: WKWebView {
+class WatchtowerWebView: WKWebView, BrowserEngineView {
     weak var browser: BrowserPaneModel?
+
+    /// Load the given URL request (BrowserEngineView conformance).
+    func loadRequest(_ request: URLRequest) {
+        load(request)
+    }
+
+    /// BrowserEngineView conformance — WKWebView's goBack() returns
+    /// WKNavigation? which doesn't match the Void protocol signature.
+    func goBack() {
+        _ = super.goBack()
+    }
+
+    /// BrowserEngineView conformance — wraps WKWebView's goForward().
+    func goForward() {
+        _ = super.goForward()
+    }
+
+    /// BrowserEngineView conformance — wraps WKWebView's reload().
+    func reload() {
+        _ = super.reload()
+    }
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -154,9 +175,9 @@ class WatchtowerWebView: WKWebView {
     }
 
     override func keyDown(with event: NSEvent) {
-        // When collapsed, swallow all key events. Enter/Return expands the pane.
+        // When collapsed, swallow all key events. Enter/Return/Space expands the pane.
         if let browser = browser, browser.isCollapsed {
-            if event.keyCode == 36 || event.keyCode == 76 { // Return or Enter
+            if event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 49 { // Return, Enter, or Space
                 browser.viewModel?.toggleCollapsePane()
             }
             return
@@ -215,9 +236,9 @@ class WatchtowerWebView: WKWebView {
     }
 }
 
-// MARK: - BrowserWebView
+// MARK: - WebKitBrowserView
 
-struct BrowserWebView: NSViewRepresentable {
+struct WebKitBrowserView: NSViewRepresentable {
     @ObservedObject var browser: BrowserPaneModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
 
@@ -228,9 +249,11 @@ struct BrowserWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WatchtowerWebView {
         let config = BrowserConfiguration.makeConfiguration()
         let webView = WatchtowerWebView(frame: .zero, configuration: config)
-        webView.isInspectable = true
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
         webView.browser = browser
-        browser.webView = webView
+        browser.engineView = webView
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         context.coordinator.webView = webView

@@ -27,7 +27,34 @@
 		AA000001000000000000001C /* BrowserWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001C /* BrowserWebView.swift */; };
 		AA000001000000000000001D /* NSView+ScrollToVisible.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001D /* NSView+ScrollToVisible.swift */; };
 		AA000001000000000000001E /* HistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001E /* HistoryStore.swift */; };
+		AA000001000000000000001F /* BrowserEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001F /* BrowserEngine.swift */; };
+		AA0000010000000000000020 /* WatchtowerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000020 /* WatchtowerConfig.swift */; };
+		AA0000010000000000000021 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000021 /* SettingsView.swift */; };
+		AA0000010000000000000022 /* BrowserEngineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000022 /* BrowserEngineView.swift */; };
+		AA0000010000000000000023 /* ChromiumBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000023 /* ChromiumBrowserView.swift */; };
+		AA0000010000000000000024 /* ChromiumBrowserRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000024 /* ChromiumBrowserRepresentable.swift */; };
+		AA0000010000000000000025 /* ChromiumManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000025 /* ChromiumManager.swift */; };
+		AA0000010000000000000026 /* CEFHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000026 /* CEFHelpers.swift */; };
+		AA0000010000000000000027 /* Chromium Embedded Framework.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000027 /* Chromium Embedded Framework.framework */; };
+		AA0000010000000000000028 /* Chromium Embedded Framework.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000027 /* Chromium Embedded Framework.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		AA0000010000000000000029 /* CefApplication.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000029 /* CefApplication.swift */; };
+		AA000001000000000000002A /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002A /* main.swift */; };
+		AA000001000000000000002B /* CEFClientHandlers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* CEFClientHandlers.swift */; };
+		AA000001000000000000002F /* IPCServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002F /* IPCServer.swift */; };
+		AA000001000000000000002C /* main.c in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002C /* main.c */; };
+		AA000001000000000000002D /* Chromium Embedded Framework.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000027 /* Chromium Embedded Framework.framework */; };
+		AA000001000000000000002E /* Watchtower Helper.app in Embed Helpers */ = {isa = PBXBuildFile; fileRef = AA0000030000000000000002 /* Watchtower Helper.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AA00000E0000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA00000C0000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000080000000000000002;
+			remoteInfo = "Watchtower Helper";
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		AA0000020000000000000001 /* WatchtowerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchtowerApp.swift; sourceTree = "<group>"; };
@@ -53,14 +80,109 @@
 		AA000002000000000000001C /* BrowserWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserWebView.swift; sourceTree = "<group>"; };
 		AA000002000000000000001D /* NSView+ScrollToVisible.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSView+ScrollToVisible.swift"; sourceTree = "<group>"; };
 		AA000002000000000000001E /* HistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryStore.swift; sourceTree = "<group>"; };
+		AA000002000000000000001F /* BrowserEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserEngine.swift; sourceTree = "<group>"; };
+		AA0000020000000000000020 /* WatchtowerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchtowerConfig.swift; sourceTree = "<group>"; };
+		AA0000020000000000000021 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		AA0000020000000000000022 /* BrowserEngineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserEngineView.swift; sourceTree = "<group>"; };
+		AA0000020000000000000023 /* ChromiumBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumBrowserView.swift; sourceTree = "<group>"; };
+		AA0000020000000000000024 /* ChromiumBrowserRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumBrowserRepresentable.swift; sourceTree = "<group>"; };
+		AA0000020000000000000025 /* ChromiumManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumManager.swift; sourceTree = "<group>"; };
+		AA0000020000000000000026 /* CEFHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CEFHelpers.swift; sourceTree = "<group>"; };
+		AA0000020000000000000027 /* Chromium Embedded Framework.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = "Chromium Embedded Framework.framework"; path = "chromium/Release/Chromium Embedded Framework.framework"; sourceTree = SOURCE_ROOT; };
+		AA0000020000000000000029 /* CefApplication.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CefApplication.swift; sourceTree = "<group>"; };
+		AA000002000000000000002A /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		AA000002000000000000002B /* CEFClientHandlers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CEFClientHandlers.swift; sourceTree = "<group>"; };
+		AA000002000000000000002F /* IPCServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPCServer.swift; sourceTree = "<group>"; };
+		AA000002000000000000002C /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
+		AA000002000000000000002D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA0000030000000000000001 /* Watchtower.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Watchtower.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000030000000000000002 /* Watchtower Helper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Watchtower Helper.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		AA00000B0000000000000002 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				AA0000010000000000000028 /* Chromium Embedded Framework.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA00000B0000000000000003 /* Embed Helpers */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				AA000001000000000000002E /* Watchtower Helper.app in Embed Helpers */,
+			);
+			name = "Embed Helpers";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AA0000100000000000000002 /* Create CEF Helper Variants */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Watchtower Helper.app",
+			);
+			name = "Create CEF Helper Variants";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Watchtower Helper (Renderer).app/Contents/MacOS/Watchtower Helper (Renderer)",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Create specialized CEF helper app variants.\n# CEF looks for helpers named \"<App> Helper (Renderer)\", \"<App> Helper (GPU)\",\n# \"<App> Helper (Plugin)\", and \"<App> Helper (Alerts)\" for different process types.\n# Without these, the renderer process cannot launch.\nFW_DIR=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\nBASE_HELPER=\"${FW_DIR}/Watchtower Helper.app\"\n\nif [ ! -d \"$BASE_HELPER\" ]; then\n    echo \"warning: Base helper app not found at $BASE_HELPER\"\n    exit 0\nfi\n\nSUFFIXES=(\"Renderer\" \"GPU\" \"Plugin\" \"Alerts\")\nBUNDLE_ID_SUFFIXES=(\"renderer\" \"gpu\" \"plugin\" \"alerts\")\n\nfor i in \"${!SUFFIXES[@]}\"; do\n    SUFFIX=\"${SUFFIXES[$i]}\"\n    ID_SUFFIX=\"${BUNDLE_ID_SUFFIXES[$i]}\"\n    VARIANT_NAME=\"Watchtower Helper (${SUFFIX})\"\n    VARIANT_DIR=\"${FW_DIR}/${VARIANT_NAME}.app\"\n    \n    # Remove stale copy\n    rm -rf \"$VARIANT_DIR\"\n    \n    # Copy the base helper\n    cp -R \"$BASE_HELPER\" \"$VARIANT_DIR\"\n    \n    # Rename the binary\n    mv \"${VARIANT_DIR}/Contents/MacOS/Watchtower Helper\" \"${VARIANT_DIR}/Contents/MacOS/${VARIANT_NAME}\"\n    \n    # Update Info.plist\n    /usr/libexec/PlistBuddy -c \"Set :CFBundleExecutable ${VARIANT_NAME}\" \"${VARIANT_DIR}/Contents/Info.plist\"\n    /usr/libexec/PlistBuddy -c \"Set :CFBundleName ${VARIANT_NAME}\" \"${VARIANT_DIR}/Contents/Info.plist\"\n    /usr/libexec/PlistBuddy -c \"Set :CFBundleIdentifier com.watchtower.helper.${ID_SUFFIX}\" \"${VARIANT_DIR}/Contents/Info.plist\"\n    \n    # Add CFBundleDisplayName if not present\n    /usr/libexec/PlistBuddy -c \"Add :CFBundleDisplayName string ${VARIANT_NAME}\" \"${VARIANT_DIR}/Contents/Info.plist\" 2>/dev/null || \\\n    /usr/libexec/PlistBuddy -c \"Set :CFBundleDisplayName ${VARIANT_NAME}\" \"${VARIANT_DIR}/Contents/Info.plist\"\n    \n    echo \"Created helper variant: ${VARIANT_NAME}\"\ndone\n";
+		};
+		AA0000100000000000000001 /* Re-sign CEF Framework and Helpers */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Chromium Embedded Framework.framework",
+			);
+			name = "Re-sign CEF Framework and Helpers";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Chromium Embedded Framework.framework/Versions/A/Libraries/libGLESv2.dylib.signed",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Re-sign all CEF framework binaries and helper variants so they match the app's signing identity.\nCEF_FW=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/Chromium Embedded Framework.framework\"\nFW_DIR=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\n\nif [ -d \"$CEF_FW\" ]; then\n    # Sign internal libraries first (inside-out)\n    find \"$CEF_FW\" -name '*.dylib' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none {} \\;\n    # Re-sign the framework itself last\n    codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"$CEF_FW\"\nfi\n\n# Re-sign all helper app variants\nfor helper in \"${FW_DIR}/Watchtower Helper\"*.app; do\n    if [ -d \"$helper\" ]; then\n        codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none --deep \"$helper\"\n        echo \"Signed: $(basename \"$helper\")\"\n    fi\ndone\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AA0000040000000000000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA0000010000000000000027 /* Chromium Embedded Framework.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000040000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000001000000000000002D /* Chromium Embedded Framework.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,7 +193,9 @@
 			isa = PBXGroup;
 			children = (
 				AA0000060000000000000001 /* Watchtower/Watchtower */,
+				AA0000060000000000000002 /* Watchtower/WatchtowerHelper */,
 				AA0000070000000000000001 /* Products */,
+				AA0000070000000000000002 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -101,16 +225,46 @@
 				AA000002000000000000001C /* BrowserWebView.swift */,
 				AA000002000000000000001D /* NSView+ScrollToVisible.swift */,
 				AA000002000000000000001E /* HistoryStore.swift */,
+				AA000002000000000000001F /* BrowserEngine.swift */,
+				AA0000020000000000000020 /* WatchtowerConfig.swift */,
+				AA0000020000000000000021 /* SettingsView.swift */,
+				AA0000020000000000000022 /* BrowserEngineView.swift */,
+				AA0000020000000000000023 /* ChromiumBrowserView.swift */,
+				AA0000020000000000000024 /* ChromiumBrowserRepresentable.swift */,
+				AA0000020000000000000025 /* ChromiumManager.swift */,
+				AA0000020000000000000026 /* CEFHelpers.swift */,
+				AA0000020000000000000029 /* CefApplication.swift */,
+				AA000002000000000000002A /* main.swift */,
+				AA000002000000000000002B /* CEFClientHandlers.swift */,
+				AA000002000000000000002F /* IPCServer.swift */,
 			);
 			path = Watchtower/Watchtower;
+			sourceTree = "<group>";
+		};
+		AA0000060000000000000002 /* Watchtower/WatchtowerHelper */ = {
+			isa = PBXGroup;
+			children = (
+				AA000002000000000000002C /* main.c */,
+				AA000002000000000000002D /* Info.plist */,
+			);
+			path = Watchtower/WatchtowerHelper;
 			sourceTree = "<group>";
 		};
 		AA0000070000000000000001 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				AA0000030000000000000001 /* Watchtower.app */,
+				AA0000030000000000000002 /* Watchtower Helper.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		AA0000070000000000000002 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000020000000000000027 /* Chromium Embedded Framework.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -123,14 +277,35 @@
 				AA00000A0000000000000001 /* Sources */,
 				AA0000040000000000000001 /* Frameworks */,
 				AA00000B0000000000000001 /* Resources */,
+				AA00000B0000000000000002 /* Embed Frameworks */,
+				AA00000B0000000000000003 /* Embed Helpers */,
+				AA0000100000000000000002 /* Create CEF Helper Variants */,
+				AA0000100000000000000001 /* Re-sign CEF Framework and Helpers */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA00000E0000000000000004 /* PBXTargetDependency */,
+			);
+			name = Watchtower;
+			productName = Watchtower;
+			productReference = AA0000030000000000000001 /* Watchtower.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AA0000080000000000000002 /* Watchtower Helper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000090000000000000002 /* Build configuration list for PBXNativeTarget "Watchtower Helper" */;
+			buildPhases = (
+				AA00000A0000000000000002 /* Sources */,
+				AA0000040000000000000002 /* Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = Watchtower;
-			productName = Watchtower;
-			productReference = AA0000030000000000000001 /* Watchtower.app */;
+			name = "Watchtower Helper";
+			productName = "Watchtower Helper";
+			productReference = AA0000030000000000000002 /* Watchtower Helper.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -144,6 +319,9 @@
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
 					AA0000080000000000000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					AA0000080000000000000002 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
@@ -162,6 +340,7 @@
 			projectRoot = "";
 			targets = (
 				AA0000080000000000000001 /* Watchtower */,
+				AA0000080000000000000002 /* Watchtower Helper */,
 			);
 		};
 /* End PBXProject section */
@@ -201,10 +380,38 @@
 				AA000001000000000000001C /* BrowserWebView.swift in Sources */,
 				AA000001000000000000001D /* NSView+ScrollToVisible.swift in Sources */,
 				AA000001000000000000001E /* HistoryStore.swift in Sources */,
+				AA000001000000000000001F /* BrowserEngine.swift in Sources */,
+				AA0000010000000000000020 /* WatchtowerConfig.swift in Sources */,
+				AA0000010000000000000021 /* SettingsView.swift in Sources */,
+				AA0000010000000000000022 /* BrowserEngineView.swift in Sources */,
+				AA0000010000000000000023 /* ChromiumBrowserView.swift in Sources */,
+				AA0000010000000000000024 /* ChromiumBrowserRepresentable.swift in Sources */,
+				AA0000010000000000000025 /* ChromiumManager.swift in Sources */,
+				AA0000010000000000000026 /* CEFHelpers.swift in Sources */,
+				AA0000010000000000000029 /* CefApplication.swift in Sources */,
+				AA000001000000000000002A /* main.swift in Sources */,
+				AA000001000000000000002B /* CEFClientHandlers.swift in Sources */,
+				AA000001000000000000002F /* IPCServer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA00000A0000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000001000000000000002C /* main.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AA00000E0000000000000004 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000080000000000000002 /* Watchtower Helper */;
+			targetProxy = AA00000E0000000000000003 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AA00000E0000000000000001 /* Debug */ = {
@@ -244,7 +451,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -307,7 +514,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -338,10 +545,15 @@
 				DEVELOPMENT_TEAM = 47P4ZSALX4;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/chromium/Release",
+				);
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64/Headers",
+					"$(PROJECT_DIR)/chromium",
 				);
 				INFOPLIST_FILE = Watchtower/Watchtower/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Watchtower;
@@ -398,10 +610,15 @@
 				DEVELOPMENT_TEAM = 47P4ZSALX4;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/chromium/Release",
+				);
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64/Headers",
+					"$(PROJECT_DIR)/chromium",
 				);
 				INFOPLIST_FILE = Watchtower/Watchtower/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Watchtower;
@@ -445,6 +662,66 @@
 			};
 			name = Release;
 		};
+		AA00000F0000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 47P4ZSALX4;
+				ENABLE_HARDENED_RUNTIME = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/chromium/Release",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/chromium",
+				);
+				INFOPLIST_FILE = Watchtower/WatchtowerHelper/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.eyes.Watchtower.helper;
+				PRODUCT_NAME = "Watchtower Helper";
+			};
+			name = Debug;
+		};
+		AA00000F0000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 47P4ZSALX4;
+				ENABLE_HARDENED_RUNTIME = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/chromium/Release",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/chromium",
+				);
+				INFOPLIST_FILE = Watchtower/WatchtowerHelper/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.eyes.Watchtower.helper;
+				PRODUCT_NAME = "Watchtower Helper";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -453,6 +730,15 @@
 			buildConfigurations = (
 				AA00000F0000000000000001 /* Debug */,
 				AA00000F0000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000090000000000000002 /* Build configuration list for PBXNativeTarget "Watchtower Helper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000F0000000000000003 /* Debug */,
+				AA00000F0000000000000004 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

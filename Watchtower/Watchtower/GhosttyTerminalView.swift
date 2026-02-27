@@ -193,17 +193,20 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         var envVarStructs: [ghostty_env_var_s] = []
         var envAllocations: [UnsafeMutablePointer<CChar>] = []
 
-        if let env = terminal.env {
-            for (key, value) in env {
-                let cKey = strdup(key)!
-                let cVal = strdup(value)!
-                envAllocations.append(cKey)
-                envAllocations.append(cVal)
-                envVarStructs.append(ghostty_env_var_s(
-                    key: UnsafePointer(cKey),
-                    value: UnsafePointer(cVal)
-                ))
-            }
+        // Always inject WATCHTOWER_PANE_ID so CLI tools can identify
+        // which pane they are running in.
+        var mergedEnv = terminal.env ?? [:]
+        mergedEnv["WATCHTOWER_PANE_ID"] = terminal.id.uuidString
+
+        for (key, value) in mergedEnv {
+            let cKey = strdup(key)!
+            let cVal = strdup(value)!
+            envAllocations.append(cKey)
+            envAllocations.append(cVal)
+            envVarStructs.append(ghostty_env_var_s(
+                key: UnsafePointer(cKey),
+                value: UnsafePointer(cVal)
+            ))
         }
 
         // Set working directory and optional command/env, then create surface
@@ -238,6 +241,37 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         }
 
         Self.logger.info("Created Ghostty surface for terminal: \(self.terminal.title)")
+
+        // If the terminal has initial input, send it once the shell is ready.
+        // We delay briefly to give the shell time to start and show its prompt.
+        // Text is sent via ghostty_surface_text, then Enter is simulated via
+        // ghostty_surface_key (since \n and \r sent as text are treated as
+        // literal characters, not key presses).
+        if let initialInput = terminal.initialInput {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let surface = self?.surface else { return }
+
+                // Send the command text
+                initialInput.withCString { ptr in
+                    ghostty_surface_text(surface, ptr, UInt(initialInput.utf8.count))
+                }
+
+                // Simulate pressing Enter (Return keycode = 36 on macOS)
+                var key_ev = ghostty_input_key_s()
+                key_ev.action = GHOSTTY_ACTION_PRESS
+                key_ev.keycode = 36
+                key_ev.mods = GHOSTTY_MODS_NONE
+                key_ev.consumed_mods = GHOSTTY_MODS_NONE
+                key_ev.unshifted_codepoint = 0x0D
+                key_ev.text = nil
+                key_ev.composing = false
+                ghostty_surface_key(surface, key_ev)
+
+                // Release the key
+                key_ev.action = GHOSTTY_ACTION_RELEASE
+                ghostty_surface_key(surface, key_ev)
+            }
+        }
 
         // Schedule an initial status check after the surface has had time to
         // initialize.  This ensures the icon reflects the actual Ghostty state
@@ -430,9 +464,9 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     // MARK: - Keyboard Input
 
     override func keyDown(with event: NSEvent) {
-        // When collapsed, swallow all key events. Enter/Return expands the pane.
+        // When collapsed, swallow all key events. Enter/Return/Space expands the pane.
         if terminal.isCollapsed {
-            if event.keyCode == 36 || event.keyCode == 76 { // Return or Enter
+            if event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 49 { // Return, Enter, or Space
                 terminal.viewModel?.toggleCollapsePane()
             }
             return

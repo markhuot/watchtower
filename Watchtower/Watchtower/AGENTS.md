@@ -40,6 +40,23 @@ Non-obvious learnings specific to the Swift source files in this directory.
 - **Auto-dismiss**: `focusPane()` automatically nils `commandPalettePaneId` when focus moves to a different pane. This eliminated manual `dismissCommandPalette()` calls from `focusPreviousPane`, `focusNextPane`, and `focusPane(id:)`.
 - **`updateNSView` fires during SwiftUI view teardown**: When a view is removed from the hierarchy, SwiftUI still calls `updateNSView`. Any `makeFirstResponder` call in `updateNSView` will re-steal focus. Place one-time first-responder grabs in `makeNSView` only.
 
+## IPC Server (IPCServer.swift)
+
+- **Unix domain socket** at `~/.config/watchtower/watchtower.sock`. Created on app launch, removed on termination.
+- **View model registry**: `register(_ viewModel:)` / `unregister(_ viewModel:)` hold weak references to every window's `PaneContainerViewModel`. Called from ContentView's `.onAppear`/`.onDisappear`.
+- **JSON protocol**: Requests are `{"command": "new-terminal", "paneId": "<uuid>", ...}`. Responses are `{"success": true}` or `{"success": false, "error": "..."}`.
+- **Pane lookup**: `paneId` from the request is matched against all registered view models to find the originating pane. New panes are inserted adjacent (index + 1) to the source pane.
+- **Commands**: `new-terminal` (optional `directory`, `command`) and `new-browser` (required `url`). Both create the pane, focus it via `focusPane()`, and inherit the working directory from the source pane when not explicitly provided.
+- **Thread safety**: Socket reads happen on a background `DispatchQueue`; command handlers dispatch to `DispatchQueue.main.async` for all UI/model work.
+- **`WATCHTOWER_PANE_ID` env var**: Injected into every Ghostty terminal surface in `GhosttyTerminalView.setupView()`. The CLI reads this to identify which pane it's running in.
+
+## CLI (`cli/` directory)
+
+- **Built with Bun + TypeScript**. Entry point: `cli/src/index.ts`.
+- **Commands**: `watchtower new terminal [--directory <path>] [--command <cmd>]` and `watchtower new browser <url>`.
+- **IPC client** (`cli/src/ipc.ts`): Connects to `~/.config/watchtower/watchtower.sock`, sends JSON, reads response. Reads `WATCHTOWER_PANE_ID` env var to identify the calling pane.
+- **Compile to binary**: `bun build --compile cli/src/index.ts --outfile watchtower` (not yet set up as a build step).
+
 ## Command Palette
 
 - **No `managesFocus` flag**: The old `CommandPaletteItem.managesFocus` / `actionDidManageFocus` / `restoreFocus` three-way protocol is replaced by the `focusGeneration` counter and auto-dismiss in `focusPane`. Actions that need to manage focus call `vm.focusPane()` directly.

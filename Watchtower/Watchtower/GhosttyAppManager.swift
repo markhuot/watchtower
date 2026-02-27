@@ -29,6 +29,9 @@ class GhosttyAppManager: ObservableObject {
     /// Highlight color for focused pane border, from Ghostty theme or system accent.
     @Published private(set) var highlightColor: Color = Color.accentColor
 
+    /// Bell/alert color from Ghostty theme palette (bright red, index 9).
+    @Published private(set) var bellColor: Color = Color.red
+
     /// Foreground color from Ghostty config, used for subtle UI elements like unfocused pane borders.
     @Published private(set) var foregroundColor: Color = Color(white: 0.9)
 
@@ -185,6 +188,9 @@ class GhosttyAppManager: ObservableObject {
         // Read highlight color: try selection-background, then cursor-color, then system accent
         self.highlightColor = Self.readHighlightColor(from: cfg)
 
+        // Read bell color from palette (bright red, index 9)
+        self.bellColor = Self.readBellColor(from: cfg)
+
         // Read foreground color for subtle UI elements
         self.foregroundColor = Self.readForegroundColor(from: cfg)
 
@@ -267,6 +273,9 @@ class GhosttyAppManager: ObservableObject {
 
         case GHOSTTY_ACTION_PROGRESS_REPORT:
             return progressReport(app, target: target, v: action.action.progress_report)
+
+        case GHOSTTY_ACTION_RING_BELL:
+            return ringBell(app, target: target)
 
         case GHOSTTY_ACTION_NEW_SPLIT,
              GHOSTTY_ACTION_NEW_WINDOW,
@@ -421,6 +430,19 @@ class GhosttyAppManager: ObservableObject {
         return true
     }
 
+    private static func ringBell(
+        _ app: ghostty_app_t,
+        target: ghostty_target_s
+    ) -> Bool {
+        guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
+        guard let surface = target.target.surface else { return false }
+        guard let view = surfaceView(from: surface) else { return false }
+        DispatchQueue.main.async {
+            view.terminal.ringBell()
+        }
+        return true
+    }
+
     private static func openURL(
         _ app: ghostty_app_t,
         target: ghostty_target_s,
@@ -483,11 +505,23 @@ class GhosttyAppManager: ObservableObject {
     }
 
     private static func readHighlightColor(from config: ghostty_config_t) -> Color {
-        // Read palette index 4 (blue) from the Ghostty theme.
-        // Note: selection-background and cursor-color use TerminalColor (a tagged union)
-        // which the Ghostty C API cannot export. The palette uses plain Color structs
-        // and is fully readable.
-        //
+        if let color = readPaletteColor(from: config, index: 4) {
+            return color
+        }
+        // Fallback to system accent
+        return Color.accentColor
+    }
+
+    private static func readBellColor(from config: ghostty_config_t) -> Color {
+        // Palette index 9 = bright red, a softer "light red" from the theme.
+        if let color = readPaletteColor(from: config, index: 9) {
+            return color
+        }
+        return Color.red
+    }
+
+    /// Read a single color from the Ghostty palette by index (0–255).
+    private static func readPaletteColor(from config: ghostty_config_t, index: Int) -> Color? {
         // IMPORTANT: Ghostty's Zig-side Palette.C struct uses [265]Color.C (a typo,
         // should be 256), so ghostty_config_get writes 265×3 = 795 bytes — more than
         // the C header's ghostty_config_palette_s (256×3 = 768 bytes). We heap-allocate
@@ -501,18 +535,16 @@ class GhosttyAppManager: ObservableObject {
         buffer.initializeMemory(as: UInt8.self, repeating: 0, count: bufferSize)
 
         let key = "palette"
-        if ghostty_config_get(config, buffer, key, UInt(key.lengthOfBytes(using: .utf8))) {
-            let colors = buffer.bindMemory(to: ghostty_config_color_s.self, capacity: zigPaletteCount)
-            let color = colors[4]
-            return Color(
-                red: Double(color.r) / 255,
-                green: Double(color.g) / 255,
-                blue: Double(color.b) / 255
-            )
+        guard ghostty_config_get(config, buffer, key, UInt(key.lengthOfBytes(using: .utf8))) else {
+            return nil
         }
-
-        // Fallback to system accent
-        return Color.accentColor
+        let colors = buffer.bindMemory(to: ghostty_config_color_s.self, capacity: zigPaletteCount)
+        let color = colors[index]
+        return Color(
+            red: Double(color.r) / 255,
+            green: Double(color.g) / 255,
+            blue: Double(color.b) / 255
+        )
     }
 
     private static func colorChange(
