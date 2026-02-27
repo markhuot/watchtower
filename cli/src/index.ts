@@ -2,6 +2,7 @@
 
 import { newTerminal } from "./commands/new-terminal.ts";
 import { newBrowser } from "./commands/new-browser.ts";
+import { closePane } from "./commands/close.ts";
 
 const args = process.argv.slice(2);
 
@@ -11,6 +12,7 @@ function printUsage() {
 Commands:
   new terminal    Open a new terminal pane
   new browser     Open a new browser pane
+  close           Close a pane by ID
 
 Options:
   --help, -h      Show this help message
@@ -29,19 +31,26 @@ if (
   process.exit(0);
 }
 
-// Parse subcommand: "new terminal" or "new browser"
-const command = args.slice(0, 2).join(" ");
-const commandArgs = args.slice(2);
+// Parse subcommand: "new terminal", "new browser", or "close"
+// "close" is a single-word command; "new terminal" and "new browser" are two-word.
+const firstArg = args[0];
 
-switch (command) {
-  case "new terminal":
-    await newTerminal(commandArgs);
-    break;
-  case "new browser":
-    await newBrowser(commandArgs);
-    break;
-  default:
-    console.error(`Unknown command: ${args.join(" ")}`);
-    printUsage();
-    process.exit(1);
+if (firstArg === "close") {
+  await closePane(args.slice(1));
+} else {
+  const command = args.slice(0, 2).join(" ");
+  const commandArgs = args.slice(2);
+
+  switch (command) {
+    case "new terminal":
+      await newTerminal(commandArgs);
+      break;
+    case "new browser":
+      await newBrowser(commandArgs);
+      break;
+    default:
+      console.error(`Unknown command: ${args.join(" ")}`);
+      printUsage();
+      process.exit(1);
+  }
 }

@@ -35,6 +35,11 @@ class BrowserPaneModel: PaneModel {
     /// not trigger redundant loads in `updateNSView`.
     @Published var navigationGeneration: UInt = 0
 
+    /// True once the CEF close sequence has been initiated for this browser.
+    /// Prevents double-close and tells `removePane` that the close is already
+    /// in flight (the pane will be removed when `on_before_close` fires).
+    var isClosingCEF: Bool = false
+
     override var title: String { pageTitle }
     override var subtitle: String? {
         guard let host = url.host else { return nil }

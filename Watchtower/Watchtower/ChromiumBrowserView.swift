@@ -12,6 +12,11 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
     /// The CEF browser object. Set in on_after_created.
     var cefBrowser: UnsafeMutablePointer<cef_browser_t>?
 
+    deinit {
+        NSLog("[CEF] ChromiumBrowserView.deinit: paneId=%@, hasCefBrowser=%d",
+              browser?.id.uuidString ?? "nil", cefBrowser != nil ? 1 : 0)
+    }
+
     // MARK: - BrowserEngineView
 
     func loadRequest(_ request: URLRequest) {
@@ -261,10 +266,45 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
     }
 
     func closeCEFBrowser() {
-        guard let browser = cefBrowser else { return }
-        guard let host = browser.pointee.get_host?(browser) else { return }
+        let backtrace = Thread.callStackSymbols.joined(separator: "\n")
+        NSLog("[CEF] closeCEFBrowser: cefBrowser=%@, paneId=%@\n  backtrace:\n%@",
+              String(describing: cefBrowser), browser?.id.uuidString ?? "nil", backtrace)
+        guard let browser = cefBrowser else {
+            NSLog("[CEF] closeCEFBrowser: no cefBrowser, returning early")
+            return
+        }
+        guard let host = browser.pointee.get_host?(browser) else {
+            NSLog("[CEF] closeCEFBrowser: could not get host, returning early")
+            return
+        }
+        // Use force=0 for a graceful close. do_close will fire and return true,
+        // meaning we take responsibility for the close. We will call
+        // close_browser(force=1) from dismantleNSView once SwiftUI has torn
+        // down the view hierarchy.
+        NSLog("[CEF] closeCEFBrowser: calling close_browser(force=0)")
+        host.pointee.close_browser?(host, 0)
+        _ = host.pointee.base.release?(&host.pointee.base)
+        NSLog("[CEF] closeCEFBrowser: close_browser returned")
+    }
+
+    /// Called from dismantleNSView after SwiftUI has removed the view from
+    /// the hierarchy. With force=1 CEF will destroy the browser immediately
+    /// and fire on_before_close.
+    func closeCEFBrowserForce() {
+        NSLog("[CEF] closeCEFBrowserForce: cefBrowser=%@, paneId=%@",
+              String(describing: cefBrowser), browser?.id.uuidString ?? "nil")
+        guard let cefBrowser = cefBrowser else {
+            NSLog("[CEF] closeCEFBrowserForce: no cefBrowser, returning early")
+            return
+        }
+        guard let host = cefBrowser.pointee.get_host?(cefBrowser) else {
+            NSLog("[CEF] closeCEFBrowserForce: could not get host, returning early")
+            return
+        }
+        NSLog("[CEF] closeCEFBrowserForce: calling close_browser(force=1)")
         host.pointee.close_browser?(host, 1)
         _ = host.pointee.base.release?(&host.pointee.base)
+        NSLog("[CEF] closeCEFBrowserForce: close_browser(force=1) returned")
     }
 
     // MARK: - Appearance Syncing

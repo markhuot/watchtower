@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 struct WatchtowerApp: App {
     // Initialize Ghostty at app launch
@@ -155,48 +156,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // correctly against the dark terminal background.
         NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
 
-        // Configure all existing windows immediately
+        // Configure all existing windows immediately and set ourselves as delegate
         for window in NSApp.windows {
             configureWindow(window)
         }
 
         // Observe future window creation
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowDidBecomeAvailable(_:)),
-            name: NSWindow.didBecomeKeyNotification,
-            object: nil
-        )
-
-        // Re-apply window configuration when entering full screen, because
-        // macOS resets the window backgroundColor during the transition.
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowDidChangeFullScreen(_:)),
-            name: NSWindow.willEnterFullScreenNotification,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowDidChangeFullScreen(_:)),
-            name: NSWindow.didEnterFullScreenNotification,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowDidChangeFullScreen(_:)),
-            name: NSWindow.didExitFullScreenNotification,
-            object: nil
-        )
-    }
-
-    @objc func windowDidBecomeAvailable(_ notification: Notification) {
-        if let window = notification.object as? NSWindow {
-            configureWindow(window)
+        // Re-apply window configuration on key window changes and full screen transitions,
+        // because macOS resets the window backgroundColor during the transition.
+        for name in [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.willEnterFullScreenNotification,
+            NSWindow.didEnterFullScreenNotification,
+            NSWindow.didExitFullScreenNotification,
+        ] {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowNeedsConfiguration(_:)),
+                name: name,
+                object: nil
+            )
         }
     }
 
-    @objc func windowDidChangeFullScreen(_ notification: Notification) {
+    @objc func windowNeedsConfiguration(_ notification: Notification) {
         if let window = notification.object as? NSWindow {
             configureWindow(window)
         }

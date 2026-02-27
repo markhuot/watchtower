@@ -44,9 +44,11 @@ atexit {
 _ = NSApplication.shared  // Force NSApplication initialization — our Info.plist
                            // sets NSPrincipalClass to CefNSApplication
 
-// CEF initialization is deferred until the first Chromium pane is created
-// (via ChromiumManager.shared.ensureInitialized() in ChromiumBrowserRepresentable).
-// This allows CLI flags like --remote-debugging-port to set config values
-// before CEF starts.
+// Eagerly initialize CEF if the user has Chromium engine configured.
+// This ensures CEF's profile KeepAlive system has a browser window registered
+// before the profile creation flow completes, preventing premature _exit().
+if WatchtowerConfig.shared.browserEngine == .chromium {
+    ChromiumManager.shared.ensureInitialized()
+}
 
 WatchtowerApp.main()

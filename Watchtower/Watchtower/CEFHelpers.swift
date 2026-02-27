@@ -6,46 +6,25 @@ private let logger = Logger(subsystem: "com.watchtower", category: "CEFHelpers")
 // MARK: - Reference Counting
 
 /// Atomic reference count stored alongside each client-side CEF struct allocation.
-/// Layout: [CEFRefCount header] [CEF struct bytes]
+/// Layout: [Int32 refcount (padded to alignment)] [CEF struct bytes]
+///
+/// Uses `OSAtomicIncrement32Barrier` / `OSAtomicDecrement32Barrier` for lock-free
+/// atomic operations. This avoids the use-after-free that occurs with lock-based
+/// counting: when refcount hits 0 the allocation is freed immediately, so any
+/// lock stored in the freed memory becomes invalid for concurrent callers.
+///
 /// The CEF struct's `base.add_ref`/`release`/etc. callbacks use pointer arithmetic
-/// to find this header.
-final class CEFRefCount {
-    private var _count: Int32 = 1
-    private var _lock = os_unfair_lock()
+/// to find the refcount header.
 
-    var count: Int32 {
-        os_unfair_lock_lock(&_lock)
-        let val = _count
-        os_unfair_lock_unlock(&_lock)
-        return val
-    }
+/// The byte offset from the start of the allocation to the CEF struct.
+/// Must be large enough to hold an Int32 and maintain alignment.
+private let cefRefCountHeaderSize = 16  // plenty of room for Int32 + alignment padding
 
-    /// Atomically increment and return the new value.
-    func increment() -> Int32 {
-        os_unfair_lock_lock(&_lock)
-        _count += 1
-        let val = _count
-        os_unfair_lock_unlock(&_lock)
-        return val
-    }
-
-    /// Atomically decrement and return the new value.
-    func decrement() -> Int32 {
-        os_unfair_lock_lock(&_lock)
-        _count -= 1
-        let val = _count
-        os_unfair_lock_unlock(&_lock)
-        return val
-    }
-
-    /// Given a pointer to a `cef_base_ref_counted_t` that was allocated by `cefCreate`,
-    /// returns the `CEFRefCount` managing it. Uses `Unmanaged` stored before the struct.
-    static func from(_ base: UnsafeMutablePointer<cef_base_ref_counted_t>) -> CEFRefCount {
-        // The Unmanaged reference is stored in the allocation just before the struct.
-        let raw = UnsafeMutableRawPointer(base) - MemoryLayout<Unmanaged<CEFRefCount>>.stride
-        let unmanaged = raw.load(as: Unmanaged<CEFRefCount>.self)
-        return unmanaged.takeUnretainedValue()
-    }
+/// Given a pointer to a `cef_base_ref_counted_t` that was allocated by `cefCreate`,
+/// returns a pointer to the `Int32` refcount stored in the allocation header.
+private func cefRefCountPtr(_ base: UnsafeMutablePointer<cef_base_ref_counted_t>) -> UnsafeMutablePointer<Int32> {
+    let raw = UnsafeMutableRawPointer(base) - cefRefCountHeaderSize
+    return raw.bindMemory(to: Int32.self, capacity: 1)
 }
 
 /// Allocate and zero-initialize a CEF C struct of type `T`, setting up its
@@ -61,23 +40,21 @@ final class CEFRefCount {
 /// // ... populate function pointers ...
 /// ```
 func cefCreate<T>() -> UnsafeMutablePointer<T> {
-    let headerSize = MemoryLayout<Unmanaged<CEFRefCount>>.stride
     let structSize = MemoryLayout<T>.size
-    let alignment = MemoryLayout<T>.alignment
+    let alignment = max(MemoryLayout<T>.alignment, MemoryLayout<Int32>.alignment)
 
-    // Allocate: [Unmanaged<CEFRefCount>] [T struct]
+    // Allocate: [Int32 refcount + padding] [T struct]
     let raw = UnsafeMutableRawPointer.allocate(
-        byteCount: headerSize + structSize,
+        byteCount: cefRefCountHeaderSize + structSize,
         alignment: alignment
     )
 
-    // Store the ref count object before the struct
-    let refCount = CEFRefCount()
-    let headerPtr = raw.bindMemory(to: Unmanaged<CEFRefCount>.self, capacity: 1)
-    headerPtr.pointee = .passRetained(refCount)  // +1 strong reference to the Swift object
+    // Initialize the refcount to 1
+    let rcPtr = raw.bindMemory(to: Int32.self, capacity: 1)
+    rcPtr.pointee = 1
 
     // Zero-initialize the struct region
-    let structPtr = (raw + headerSize).bindMemory(to: T.self, capacity: 1)
+    let structPtr = (raw + cefRefCountHeaderSize).bindMemory(to: T.self, capacity: 1)
     memset(UnsafeMutableRawPointer(structPtr), 0, structSize)
 
     // Set up base ref counted callbacks.
@@ -88,19 +65,16 @@ func cefCreate<T>() -> UnsafeMutablePointer<T> {
     basePtr.pointee.size = structSize
     basePtr.pointee.add_ref = { selfPtr in
         guard let selfPtr = selfPtr else { return }
-        let rc = CEFRefCount.from(selfPtr)
-        _ = rc.increment()
+        let rcPtr = cefRefCountPtr(selfPtr)
+        OSAtomicIncrement32Barrier(rcPtr)
     }
     basePtr.pointee.release = { selfPtr -> Int32 in
         guard let selfPtr = selfPtr else { return 0 }
-        let rc = CEFRefCount.from(selfPtr)
-        let newCount = rc.decrement()
+        let rcPtr = cefRefCountPtr(selfPtr)
+        let newCount = OSAtomicDecrement32Barrier(rcPtr)
         if newCount == 0 {
-            // Release the Unmanaged reference to the CEFRefCount, then free the allocation
-            let headerSize = MemoryLayout<Unmanaged<CEFRefCount>>.stride
-            let raw = UnsafeMutableRawPointer(selfPtr) - headerSize
-            let headerPtr = raw.bindMemory(to: Unmanaged<CEFRefCount>.self, capacity: 1)
-            headerPtr.pointee.release()
+            // We are the sole owner. Free the allocation.
+            let raw = UnsafeMutableRawPointer(selfPtr) - cefRefCountHeaderSize
             raw.deallocate()
             return 1
         }
@@ -108,13 +82,13 @@ func cefCreate<T>() -> UnsafeMutablePointer<T> {
     }
     basePtr.pointee.has_one_ref = { selfPtr -> Int32 in
         guard let selfPtr = selfPtr else { return 0 }
-        let rc = CEFRefCount.from(selfPtr)
-        return rc.count == 1 ? 1 : 0
+        let rcPtr = cefRefCountPtr(selfPtr)
+        return OSAtomicAdd32Barrier(0, rcPtr) == 1 ? 1 : 0
     }
     basePtr.pointee.has_at_least_one_ref = { selfPtr -> Int32 in
         guard let selfPtr = selfPtr else { return 0 }
-        let rc = CEFRefCount.from(selfPtr)
-        return rc.count >= 1 ? 1 : 0
+        let rcPtr = cefRefCountPtr(selfPtr)
+        return OSAtomicAdd32Barrier(0, rcPtr) >= 1 ? 1 : 0
     }
 
     return structPtr

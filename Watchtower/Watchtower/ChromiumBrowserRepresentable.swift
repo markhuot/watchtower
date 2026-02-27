@@ -53,12 +53,38 @@ struct ChromiumBrowserRepresentable: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: ChromiumBrowserView, coordinator: Coordinator) {
-        nsView.closeCEFBrowser()
-        if let ctx = coordinator.clientContext {
-            cefCleanupClientContext(ctx)
+        let backtrace = Thread.callStackSymbols.joined(separator: "\n")
+        let paneId = nsView.browser?.id.uuidString ?? "nil"
+        let isClosingCEF = nsView.browser?.isClosingCEF ?? false
+        let hasCefBrowser = nsView.cefBrowser != nil
+        NSLog("[CEF] dismantleNSView: paneId=%@, isClosingCEF=%d, hasCefBrowser=%d\n  backtrace:\n%@",
+              paneId, isClosingCEF ? 1 : 0, hasCefBrowser ? 1 : 0, backtrace)
+
+        if nsView.cefBrowser != nil {
+            if isClosingCEF {
+                // do_close already called close_browser(force=1) and dispatched
+                // finishRemovingCEFPane. We're now inside the resulting SwiftUI
+                // teardown. CEF will fire on_before_close once it detects the
+                // view removal. Nothing to do here.
+                NSLog("[CEF] dismantleNSView: isClosingCEF=true, skipping force-close (already in progress)")
+            } else {
+                // Unexpected teardown (e.g. window closed externally). Force-close
+                // so CEF can clean up.
+                NSLog("[CEF] dismantleNSView: unexpected teardown, calling close_browser(force=1)")
+                nsView.closeCEFBrowserForce()
+            }
+        } else {
+            NSLog("[CEF] dismantleNSView: no cefBrowser, nothing to do")
         }
-        coordinator.clientContext = nil
+        // Do NOT call cefCleanupClientContext here — CEF's close sequence is
+        // asynchronous. The handlers must remain registered until CEF fires
+        // on_before_close, which now handles the cleanup. Cleaning up eagerly
+        // here caused EXC_BREAKPOINT on CrBrowserMain.
+        NSLog("[CEF] dismantleNSView: setting coordinator.view = nil, clientContext.browserView is %@",
+              String(describing: coordinator.clientContext?.browserView))
         coordinator.view = nil
+        NSLog("[CEF] dismantleNSView: after niling, clientContext.browserView is %@",
+              String(describing: coordinator.clientContext?.browserView))
     }
 
     // MARK: - CEF Browser Creation

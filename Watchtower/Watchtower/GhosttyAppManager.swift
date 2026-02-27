@@ -718,7 +718,12 @@ class GhosttyAppManager: ObservableObject {
     private static func closeSurface(_ userdata: UnsafeMutableRawPointer?, processAlive: Bool) {
         guard let userdata = userdata else { return }
         let surfaceView = Unmanaged<GhosttyTerminalNSView>.fromOpaque(userdata).takeUnretainedValue()
+        let terminalId = surfaceView.terminal.id.uuidString
+        let threadName = Thread.current.isMainThread ? "main" : (Thread.current.name ?? "background")
+        NSLog("[CLOSE-DEBUG] closeSurface callback: terminalId=%@, processAlive=%d, thread=%@\n  backtrace:\n%@",
+              terminalId, processAlive ? 1 : 0, threadName, Thread.callStackSymbols.joined(separator: "\n"))
         DispatchQueue.main.async {
+            NSLog("[CLOSE-DEBUG] posting ghosttySurfaceClosed for terminalId=%@", terminalId)
             NotificationCenter.default.post(
                 name: .ghosttySurfaceClosed,
                 object: surfaceView
@@ -732,4 +737,7 @@ class GhosttyAppManager: ObservableObject {
 extension Notification.Name {
     static let ghosttySurfaceClosed = Notification.Name("ghosttySurfaceClosed")
     static let browserPaneClosed = Notification.Name("browserPaneClosed")
+    /// Posted by CEF's `on_before_close` when a CEF browser has fully closed.
+    /// Used to defer pane removal until CEF's async close sequence is complete.
+    static let cefBrowserDidClose = Notification.Name("cefBrowserDidClose")
 }

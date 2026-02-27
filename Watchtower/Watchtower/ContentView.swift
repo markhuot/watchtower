@@ -78,12 +78,24 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .ghosttySurfaceClosed)) { notification in
             if let view = notification.object as? GhosttyTerminalNSView {
-                viewModel.removePane(byId: view.terminal.id)
+                let termId = view.terminal.id
+                NSLog("[CLOSE-DEBUG] .ghosttySurfaceClosed received for terminal %@, panes.count=%d, paneIds=%@",
+                      termId.uuidString, viewModel.panes.count,
+                      viewModel.panes.map { $0.id.uuidString }.joined(separator: ", "))
+                viewModel.removePane(byId: termId)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .browserPaneClosed)) { notification in
             if let paneId = notification.userInfo?["paneId"] as? UUID {
                 viewModel.removePane(byId: paneId)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cefBrowserDidClose)) { notification in
+            if let paneId = notification.userInfo?["paneId"] as? UUID {
+                NSLog("[CEF-CLOSE] onReceive cefBrowserDidClose for pane %@, panes.count=%d", paneId.uuidString, viewModel.panes.count)
+                viewModel.finishRemovingCEFPane(byId: paneId)
+            } else {
+                NSLog("[CEF-CLOSE] onReceive cefBrowserDidClose but no paneId in userInfo!")
             }
         }
         .toolbar {
@@ -944,8 +956,29 @@ class PaneContainerViewModel: ObservableObject {
             exitFocusMode()
         }
 
-        // Remove all panes to the right
-        panes.removeSubrange((currentIndex + 1)...)
+        // Initiate CEF close for any Chromium browser panes first.
+        // They will be removed asynchronously when on_before_close fires.
+        var chromiumPaneIds = Set<UUID>()
+        for pane in rightPanes {
+            if let browser = pane as? BrowserPaneModel,
+               browser.engine == .chromium,
+               !browser.isClosingCEF {
+                browser.isClosingCEF = true
+                if let chromiumView = browser.engineView as? ChromiumBrowserView {
+                    chromiumView.closeCEFBrowser()
+                }
+                chromiumPaneIds.insert(pane.id)
+            }
+        }
+
+        // Remove non-Chromium panes immediately.
+        // Chromium panes stay until finishRemovingCEFPane is called.
+        let toRemoveNow = rightPanes.filter { !chromiumPaneIds.contains($0.id) }
+        for pane in toRemoveNow {
+            if let index = panes.firstIndex(where: { $0.id == pane.id }) {
+                panes.remove(at: index)
+            }
+        }
 
         // Ensure the current pane is focused
         focusPane(focusedPane)
@@ -1051,12 +1084,42 @@ class PaneContainerViewModel: ObservableObject {
     }
 
     func removePane(byId id: UUID) {
+        let backtrace = Thread.callStackSymbols.joined(separator: "\n")
+        NSLog("[CEF-CLOSE] removePane(byId: %@) called, panes.count=%d\n  backtrace:\n%@",
+              id.uuidString, panes.count, backtrace)
+
         // Exit focus mode if the removed pane was the focus-mode target
         if id == focusModePaneId {
             exitFocusMode()
         }
 
-        guard let index = panes.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = panes.firstIndex(where: { $0.id == id }) else {
+            NSLog("[CEF-CLOSE] removePane: pane %@ not found in array!", id.uuidString)
+            return
+        }
+
+        // For Chromium browser panes, we must let CEF finish its async close
+        // sequence before removing the pane from the array. Removing the pane
+        // immediately tears down the NSView hierarchy while the CrBrowserMain
+        // thread is still using it, causing EXC_BREAKPOINT.
+        if let browser = panes[index] as? BrowserPaneModel,
+           browser.engine == .chromium,
+           !browser.isClosingCEF {
+            NSLog("[CEF-CLOSE] removePane: initiating two-phase close for Chromium pane %@", id.uuidString)
+            browser.isClosingCEF = true
+            // Initiate CEF's close sequence. The pane stays in the array
+            // (and the view stays in the hierarchy) until on_before_close
+            // fires and posts .cefBrowserDidClose, which calls
+            // finishRemovingCEFPane(byId:).
+            if let chromiumView = browser.engineView as? ChromiumBrowserView {
+                chromiumView.closeCEFBrowser()
+            } else {
+                NSLog("[CEF-CLOSE] removePane: WARNING engineView is not ChromiumBrowserView!")
+            }
+            return
+        }
+
+        NSLog("[CEF-CLOSE] removePane: removing non-Chromium pane %@ at index %d", id.uuidString, index)
 
         // Determine which pane to focus after removal.
         let neighborId: UUID
@@ -1071,6 +1134,40 @@ class PaneContainerViewModel: ObservableObject {
 
         panes.remove(at: index)
         focusPaneById(neighborId)
+    }
+
+    /// Called when CEF's `on_before_close` fires, signaling the browser is
+    /// fully shut down. Now it is safe to remove the pane from the array,
+    /// which will trigger SwiftUI to dismantle the NSView.
+    func finishRemovingCEFPane(byId id: UUID) {
+        let backtrace = Thread.callStackSymbols.joined(separator: "\n")
+        NSLog("[CEF-CLOSE] finishRemovingCEFPane(byId: %@) called, panes.count=%d\n  backtrace:\n%@",
+              id.uuidString, panes.count, backtrace)
+
+        guard let index = panes.firstIndex(where: { $0.id == id }) else {
+            NSLog("[CEF-CLOSE] finishRemovingCEFPane: pane %@ not found in array!", id.uuidString)
+            return
+        }
+
+        // Exit focus mode if the removed pane was the focus-mode target
+        if id == focusModePaneId {
+            exitFocusMode()
+        }
+
+        // Determine which pane to focus after removal.
+        let neighborId: UUID
+        if panes.count > 1 {
+            let focusIndex = index > 0 ? index - 1 : 1
+            neighborId = panes[focusIndex].id
+        } else {
+            let newTerminal = addTerminal()
+            neighborId = newTerminal.id
+        }
+
+        NSLog("[CEF-CLOSE] finishRemovingCEFPane: removing pane at index %d, focusing %@", index, neighborId.uuidString)
+        panes.remove(at: index)
+        focusPaneById(neighborId)
+        NSLog("[CEF-CLOSE] finishRemovingCEFPane: done, panes.count=%d", panes.count)
     }
 
     func focusPreviousPane() {

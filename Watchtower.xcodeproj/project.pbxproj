@@ -14,7 +14,6 @@
 		AA0000010000000000000005 /* GhosttyTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000005 /* GhosttyTerminalView.swift */; };
 		AA0000010000000000000006 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000006 /* Assets.xcassets */; };
 		AA0000010000000000000010 /* GhosttyAppManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000010 /* GhosttyAppManager.swift */; };
-		AA0000010000000000000011 /* WordList.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000011 /* WordList.swift */; };
 		AA0000010000000000000012 /* WorkspaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000012 /* WorkspaceManager.swift */; };
 		AA0000010000000000000014 /* Action.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000014 /* Action.swift */; };
 		AA0000010000000000000015 /* ActionParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000015 /* ActionParser.swift */; };
@@ -37,7 +36,7 @@
 		AA0000010000000000000026 /* CEFHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000026 /* CEFHelpers.swift */; };
 		AA0000010000000000000027 /* Chromium Embedded Framework.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000027 /* Chromium Embedded Framework.framework */; };
 		AA0000010000000000000028 /* Chromium Embedded Framework.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000027 /* Chromium Embedded Framework.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		AA0000010000000000000029 /* CefApplication.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000029 /* CefApplication.swift */; };
+		AA0000010000000000000029 /* CefApplication.m in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000029 /* CefApplication.m */; };
 		AA000001000000000000002A /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002A /* main.swift */; };
 		AA000001000000000000002B /* CEFClientHandlers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* CEFClientHandlers.swift */; };
 		AA000001000000000000002F /* IPCServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002F /* IPCServer.swift */; };
@@ -67,7 +66,6 @@
 		AA0000020000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA0000020000000000000009 /* GhosttyBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GhosttyBridge.h; sourceTree = "<group>"; };
 		AA0000020000000000000010 /* GhosttyAppManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyAppManager.swift; sourceTree = "<group>"; };
-		AA0000020000000000000011 /* WordList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordList.swift; sourceTree = "<group>"; };
 		AA0000020000000000000012 /* WorkspaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManager.swift; sourceTree = "<group>"; };
 		AA0000020000000000000014 /* Action.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Action.swift; sourceTree = "<group>"; };
 		AA0000020000000000000015 /* ActionParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionParser.swift; sourceTree = "<group>"; };
@@ -89,7 +87,7 @@
 		AA0000020000000000000025 /* ChromiumManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumManager.swift; sourceTree = "<group>"; };
 		AA0000020000000000000026 /* CEFHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CEFHelpers.swift; sourceTree = "<group>"; };
 		AA0000020000000000000027 /* Chromium Embedded Framework.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = "Chromium Embedded Framework.framework"; path = "chromium/Release/Chromium Embedded Framework.framework"; sourceTree = SOURCE_ROOT; };
-		AA0000020000000000000029 /* CefApplication.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CefApplication.swift; sourceTree = "<group>"; };
+		AA0000020000000000000029 /* CefApplication.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = CefApplication.m; sourceTree = "<group>"; };
 		AA000002000000000000002A /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		AA000002000000000000002B /* CEFClientHandlers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CEFClientHandlers.swift; sourceTree = "<group>"; };
 		AA000002000000000000002F /* IPCServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPCServer.swift; sourceTree = "<group>"; };
@@ -212,7 +210,6 @@
 				AA0000020000000000000008 /* Info.plist */,
 				AA0000020000000000000009 /* GhosttyBridge.h */,
 				AA0000020000000000000010 /* GhosttyAppManager.swift */,
-				AA0000020000000000000011 /* WordList.swift */,
 				AA0000020000000000000012 /* WorkspaceManager.swift */,
 				AA0000020000000000000014 /* Action.swift */,
 				AA0000020000000000000015 /* ActionParser.swift */,
@@ -233,7 +230,7 @@
 				AA0000020000000000000024 /* ChromiumBrowserRepresentable.swift */,
 				AA0000020000000000000025 /* ChromiumManager.swift */,
 				AA0000020000000000000026 /* CEFHelpers.swift */,
-				AA0000020000000000000029 /* CefApplication.swift */,
+				AA0000020000000000000029 /* CefApplication.m */,
 				AA000002000000000000002A /* main.swift */,
 				AA000002000000000000002B /* CEFClientHandlers.swift */,
 				AA000002000000000000002F /* IPCServer.swift */,
@@ -367,7 +364,6 @@
 				AA0000010000000000000004 /* TerminalPaneView.swift in Sources */,
 				AA0000010000000000000005 /* GhosttyTerminalView.swift in Sources */,
 				AA0000010000000000000010 /* GhosttyAppManager.swift in Sources */,
-				AA0000010000000000000011 /* WordList.swift in Sources */,
 				AA0000010000000000000012 /* WorkspaceManager.swift in Sources */,
 				AA0000010000000000000014 /* Action.swift in Sources */,
 				AA0000010000000000000015 /* ActionParser.swift in Sources */,
@@ -388,7 +384,7 @@
 				AA0000010000000000000024 /* ChromiumBrowserRepresentable.swift in Sources */,
 				AA0000010000000000000025 /* ChromiumManager.swift in Sources */,
 				AA0000010000000000000026 /* CEFHelpers.swift in Sources */,
-				AA0000010000000000000029 /* CefApplication.swift in Sources */,
+				AA0000010000000000000029 /* CefApplication.m in Sources */,
 				AA000001000000000000002A /* main.swift in Sources */,
 				AA000001000000000000002B /* CEFClientHandlers.swift in Sources */,
 				AA000001000000000000002F /* IPCServer.swift in Sources */,

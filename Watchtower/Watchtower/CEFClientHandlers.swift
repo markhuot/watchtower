@@ -29,40 +29,34 @@ class CEFClientContext {
     /// Registration returned by add_dev_tools_message_observer. Release to unregister.
     var devToolsRegistration: UnsafeMutablePointer<cef_registration_t>?
 
+    /// Guards against scheduling the async close block more than once from do_close.
+    /// close_browser(force=1) re-triggers do_close; we must only act on the first call.
+    var didScheduleForceClose: Bool = false
+
     init(browserModel: BrowserPaneModel, browserView: ChromiumBrowserView) {
         self.browserModel = browserModel
         self.browserView = browserView
     }
 
     deinit {
-        if let client = client {
-            _ = client.pointee.base.release?(&client.pointee.base)
-        }
-        if let lsh = lifeSpanHandler {
-            _ = lsh.pointee.base.release?(&lsh.pointee.base)
-        }
-        if let lh = loadHandler {
-            _ = lh.pointee.base.release?(&lh.pointee.base)
-        }
-        if let dh = displayHandler {
-            _ = dh.pointee.base.release?(&dh.pointee.base)
-        }
-        if let dlh = downloadHandler {
-            _ = dlh.pointee.base.release?(&dlh.pointee.base)
-        }
-        if let fh = focusHandler {
-            _ = fh.pointee.base.release?(&fh.pointee.base)
-        }
-        // Release DevTools registration first (unregisters observer), then the observer itself
-        if let reg = devToolsRegistration {
-            _ = reg.pointee.base.release?(&reg.pointee.base)
-        }
-        if let obs = devToolsObserver {
-            _ = obs.pointee.base.release?(&obs.pointee.base)
-        }
-        if let browser = cefBrowser {
-            _ = browser.pointee.base.release?(&browser.pointee.base)
-        }
+        // Do NOT call release() on any C handler structs here.
+        //
+        // These structs were created with cefCreate() (refcount=1) and passed
+        // to CEF, which add_ref's them internally. CEF's CrBrowserMain thread
+        // continues to hold refs to these structs for an indeterminate period
+        // after on_before_close fires — there is no safe moment to call release()
+        // from our side without risking a use-after-free on CEF's side.
+        //
+        // The structs are intentionally leaked. Each browser pane creates ~8-10
+        // small structs (total ~2-4 KB). This is an acceptable tradeoff for a
+        // GUI app where browser panes are not created/destroyed thousands of times.
+        //
+        // The cef_browser_t ref (cefBrowser) is released in on_before_close
+        // before deinit runs, so it is always nil here and does not leak.
+        //
+        // devToolsRegistration is released in cefCleanupClientContext at 250ms
+        // after on_before_close, which unregisters the observer before deinit.
+        NSLog("[CEF] CEFClientContext.deinit: intentionally skipping handler struct release to avoid use-after-free")
     }
 }
 
@@ -183,6 +177,9 @@ private func cefMakeLifeSpanHandler(context: CEFClientContext) -> UnsafeMutableP
         browser.pointee.base.add_ref?(&browser.pointee.base)
         ctx.cefBrowser = browser
 
+        // Track active browser count — starts the message pump if needed
+        ChromiumManager.shared.browserOpened()
+
         // Register DevTools message observer for Runtime.bindingCalled events
         cefSetupDevToolsObserver(context: ctx, browser: browser)
 
@@ -194,20 +191,132 @@ private func cefMakeLifeSpanHandler(context: CEFClientContext) -> UnsafeMutableP
     }
 
     handler.pointee.do_close = { (selfPtr, browser) -> Int32 in
-        return 0 // allow close
+        NSLog("[CEF] do_close called (isMain=%d)", Thread.isMainThread ? 1 : 0)
+
+        // We return TRUE (1) here to tell CEF "the app handles the close".
+        // CEF will NOT send performClose: to the NSWindow — instead it waits
+        // for us to call close_browser(force=1) to finish. But we don't want
+        // that either; what we actually want is for SwiftUI to tear down the
+        // view hierarchy (by removing the pane from the array), which causes
+        // CEF to detect its CefBrowserHostView is gone and fire on_before_close.
+        //
+        // So the sequence is:
+        //   1. do_close fires → we dispatch finishRemovingCEFPane on main queue
+        //      and return TRUE (1) to suppress performClose: on the NSWindow.
+        //   2. finishRemovingCEFPane removes the pane from the SwiftUI array.
+        //   3. SwiftUI tears down the view → dismantleNSView runs.
+        //   4. CEF detects its CefBrowserHostView is gone → fires on_before_close.
+        //   5. on_before_close calls browserClosed() → pump stops when count=0.
+
+        guard let selfPtr = selfPtr,
+              let ctx = cefContextForHandler(UnsafeMutableRawPointer(selfPtr)) else {
+            NSLog("[CEF] do_close: no context — returning true to suppress window close")
+            return 1
+        }
+
+        // Guard: do_close may fire more than once (force=1 re-triggers it).
+        // Only act on the first call.
+        guard !ctx.didScheduleForceClose else {
+            NSLog("[CEF] do_close: already scheduled — skipping (loop guard)")
+            return 1
+        }
+        ctx.didScheduleForceClose = true
+
+        // CEF fires on_before_close only when BOTH conditions are true:
+        //   1. close_browser has been called (any force value)
+        //   2. The NSView is removed from its parent window (dismantleNSView)
+        //
+        // We satisfy both by calling close_browser(force=1) and then
+        // finishRemovingCEFPane in the same async block. finishRemovingCEFPane
+        // removes the pane from SwiftUI's array, which triggers dismantleNSView.
+        // dismantleNSView sees isClosingCEF=true and skips its own force-close.
+        // CEF detects the view removal and fires on_before_close.
+        if let paneId = ctx.browserModel?.id,
+           let vm = ctx.browserModel?.viewModel,
+           let browser = browser {
+            browser.pointee.base.add_ref?(&browser.pointee.base)
+            NSLog("[CEF] do_close: dispatching force=1 + finishRemovingCEFPane for pane %@", paneId.uuidString)
+            DispatchQueue.main.async {
+                NSLog("[CEF] do_close [async]: calling close_browser(force=1) for %@", paneId.uuidString)
+                if let host = browser.pointee.get_host?(browser) {
+                    host.pointee.close_browser?(host, 1)
+                    _ = host.pointee.base.release?(&host.pointee.base)
+                }
+                _ = browser.pointee.base.release?(&browser.pointee.base)
+                NSLog("[CEF] do_close [async]: calling finishRemovingCEFPane for %@", paneId.uuidString)
+                vm.finishRemovingCEFPane(byId: paneId)
+            }
+        }
+
+        return 1 // suppress performClose: on the NSWindow
     }
 
     handler.pointee.on_before_close = { (selfPtr, browser) in
+        NSLog("[CEF] on_before_close called (isMain=%d)", Thread.isMainThread ? 1 : 0)
         guard let selfPtr = selfPtr else { return }
-        guard let ctx = cefContextForHandler(UnsafeMutableRawPointer(selfPtr)) else { return }
+        guard let ctx = cefContextForHandler(UnsafeMutableRawPointer(selfPtr)) else {
+            NSLog("[CEF] on_before_close: no context found for handler!")
+            return
+        }
+
+        let paneId = ctx.browserModel?.id
+        let isClosingCEF = ctx.browserModel?.isClosingCEF ?? false
+        NSLog("[CEF] on_before_close: paneId=%@, isClosingCEF=%d, cefBrowser=%@",
+              paneId?.uuidString ?? "nil", isClosingCEF ? 1 : 0,
+              String(describing: ctx.cefBrowser))
 
         if let b = ctx.cefBrowser {
+            NSLog("[CEF] on_before_close: releasing ctx.cefBrowser")
             b.pointee.base.release?(&b.pointee.base)
             ctx.cefBrowser = nil
         }
-        DispatchQueue.main.async {
+
+        // Track active browser count — starts a grace period before the
+        // message pump is stopped, giving CEF's CrBrowserMain thread time
+        // to finish internal cleanup.
+        NSLog("[CEF] on_before_close: calling browserClosed()")
+        ChromiumManager.shared.browserClosed()
+
+        // Delay the view teardown to give CEF's CrBrowserMain thread time
+        // to finish its internal cleanup AFTER on_before_close returns.
+        // Without this delay, removing the pane from the array triggers
+        // SwiftUI to call dismantleNSView immediately, which tears down
+        // the NSView hierarchy while CrBrowserMain is still accessing it,
+        // causing EXC_BREAKPOINT.
+        // Defer ALL cleanup to give CEF's CrBrowserMain thread time to
+        // finish its internal cleanup AFTER on_before_close returns.
+        // Previously cefCleanupClientContext ran immediately here, but
+        // CrBrowserMain was still accessing the handler objects, causing
+        // EXC_BREAKPOINT.
+        NSLog("[CEF] on_before_close: scheduling 250ms delayed cleanup + cefBrowserDidClose notification")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            NSLog("[CLOSE-DEBUG] on_before_close [delayed]: ENTERED 250ms block, paneId=%@, browserView=%@",
+                  paneId?.uuidString ?? "nil",
+                  ctx.browserView.map { String(describing: $0) } ?? "nil")
             ctx.browserView?.cefBrowser = nil
+
+            // Clean up the context registry. Deferred to here (not immediately
+            // in on_before_close) because CrBrowserMain continues accessing
+            // handler objects after on_before_close returns.
+            NSLog("[CLOSE-DEBUG] on_before_close [delayed]: calling cefCleanupClientContext")
+            cefCleanupClientContext(ctx)
+
+            // CEF is fully done with this browser. Post a notification so
+            // the view model can now safely remove the pane from the array
+            // (which will tear down the SwiftUI view and the NSView).
+            if let paneId = paneId {
+                NSLog("[CLOSE-DEBUG] on_before_close [delayed]: about to post cefBrowserDidClose for pane %@", paneId.uuidString)
+                NotificationCenter.default.post(
+                    name: .cefBrowserDidClose,
+                    object: nil,
+                    userInfo: ["paneId": paneId]
+                )
+                NSLog("[CLOSE-DEBUG] on_before_close [delayed]: posted cefBrowserDidClose for pane %@", paneId.uuidString)
+            } else {
+                NSLog("[CLOSE-DEBUG] on_before_close [delayed]: paneId is nil, NOT posting notification")
+            }
         }
+        NSLog("[CEF] on_before_close: done (cleanup deferred to 250ms block)")
     }
 
     return handler
@@ -612,6 +721,8 @@ func cefInjectFormDetectionJS(frame: UnsafeMutablePointer<cef_frame_t>) {
 // MARK: - Cleanup
 
 func cefCleanupClientContext(_ context: CEFClientContext) {
+    // Unregister from our Swift lookup dictionaries so no further callbacks
+    // can reach this context.
     if let client = context.client {
         cefUnregisterContext(forClient: client)
     }
@@ -632,5 +743,15 @@ func cefCleanupClientContext(_ context: CEFClientContext) {
     }
     if let obs = context.devToolsObserver {
         cefUnregisterHandler(UnsafeMutableRawPointer(obs))
+    }
+
+    // Release the DevTools registration. This unregisters the observer from CEF
+    // and is safe to do after on_before_close + 250ms grace period. The
+    // registration object is separate from the observer and is our ref to hold.
+    // Note: do NOT release the observer itself here — CEF holds its own refs
+    // to it and will release them internally. See deinit comments.
+    if let reg = context.devToolsRegistration {
+        _ = reg.pointee.base.release?(&reg.pointee.base)
+        context.devToolsRegistration = nil
     }
 }

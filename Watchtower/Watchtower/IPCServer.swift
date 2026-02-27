@@ -14,6 +14,7 @@ import os
 /// Command format (request):
 ///   { "command": "new-terminal", "paneId": "...", "directory": "/...", "shellCommand": "..." }
 ///   { "command": "new-browser",  "paneId": "...", "url": "https://...", "engine": "webkit|chromium", "remoteDebuggingPort": 9222 }
+///   { "command": "close-pane",   "paneId": "..." }
 ///
 /// Response format:
 ///   { "ok": true, "paneId": "..." }
@@ -271,6 +272,8 @@ final class IPCServer {
             return handleNewTerminal(json, viewModel: viewModel)
         case "new-browser":
             return handleNewBrowser(json, viewModel: viewModel)
+        case "close-pane":
+            return handleClosePane(json, viewModel: viewModel)
         default:
             return ["ok": false, "error": "Unknown command: \(command)"]
         }
@@ -334,6 +337,20 @@ final class IPCServer {
             response["warning"] = warning
         }
         return response
+    }
+
+    private func handleClosePane(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
+        guard let paneIdStr = json["paneId"] as? String,
+              let paneId = UUID(uuidString: paneIdStr) else {
+            return ["ok": false, "error": "Missing or invalid 'paneId' field"]
+        }
+
+        guard viewModel.panes.contains(where: { $0.id == paneId }) else {
+            return ["ok": false, "error": "Pane not found: \(paneIdStr)"]
+        }
+
+        viewModel.removePane(byId: paneId)
+        return ["ok": true]
     }
 }
 

@@ -29,7 +29,5 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
-	<key>NSPrincipalClass</key>
-	<string>$(PRODUCT_MODULE_NAME).CefNSApplication</string>
 </dict>
 </plist>

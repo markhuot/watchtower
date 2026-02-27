@@ -11,6 +11,12 @@ class ChromiumManager {
     private var initialized = false
     private var pumpTimer: Timer?
 
+    /// Number of active CEF browsers. The message pump timer only runs
+    /// while this is > 0. Incremented by `browserOpened()` (called from
+    /// `on_after_created`), decremented by `browserClosed()` (called from
+    /// `on_before_close`).
+    private var activeBrowserCount = 0
+
     /// The remote debugging port CEF was initialized with (0 = disabled).
     /// Only valid after `ensureInitialized()` succeeds.
     private(set) var initializedRemoteDebuggingPort: Int = 0
@@ -56,6 +62,13 @@ class ChromiumManager {
             guard let commandLine = commandLine else { return }
             withCEFString("disable-features") { switchName in
                 withCEFString("Fontations") { switchValue in
+                    commandLine.pointee.append_switch_with_value?(commandLine, &switchName, &switchValue)
+                }
+            }
+            // Disable the overscroll-to-navigate-history gesture (scroll left/right
+            // to go back/forward). Value "0" disables it; "1" enables (the default).
+            withCEFString("overscroll-history-navigation") { switchName in
+                withCEFString("0") { switchValue in
                     commandLine.pointee.append_switch_with_value?(commandLine, &switchName, &switchValue)
                 }
             }
@@ -109,6 +122,11 @@ class ChromiumManager {
         initializedRemoteDebuggingPort = WatchtowerConfig.shared.chromiumRemoteDebuggingPort
         settings.log_severity = LOGSEVERITY_VERBOSE
 
+        // Verify CefApplication.m's +load swizzle installed isHandlingSendEvent on NSApp.
+        // This must be true before cef_initialize() is called.
+        assert(NSApp?.responds(to: Selector(("isHandlingSendEvent"))) == true,
+               "[CEF] NSApp does not respond to isHandlingSendEvent — +load swizzle in CefApplication.m did not run")
+
         // Initialize
         NSLog("[CEF] Calling cef_initialize")
         let result = cef_initialize(&mainArgs, &settings, app, nil)
@@ -126,11 +144,47 @@ class ChromiumManager {
 
         initialized = true
         NSLog("[CEF] CEF initialized successfully")
+        // Start the message pump immediately and keep it running for the
+        // lifetime of the app. CEF's CrBrowserMain thread continues to
+        // post work after on_before_close and needs the pump to drain its
+        // internal queue at all times. Stopping the pump while any CEF
+        // internal thread is alive (even after all browsers are closed)
+        // causes CrBrowserMain to back up and post directly to NSApp's
+        // event loop via _cef_swizzled_sendEvent → crash. The pump costs
+        // almost nothing when idle (cef_do_message_loop_work returns
+        // immediately when there is no work to do).
         startMessagePump()
+    }
+
+    /// Called from `on_after_created` when a new CEF browser is created.
+    /// Tracks open browser count for logging only — pump lifecycle is
+    /// independent of browser count.
+    /// May be called from any thread — dispatches to main for safety.
+    func browserOpened() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.activeBrowserCount += 1
+            NSLog("[CEF] browserOpened: activeBrowserCount=%d", self.activeBrowserCount)
+        }
+    }
+
+    /// Called from `on_before_close` when a CEF browser is fully closed.
+    /// Tracks open browser count for logging only — the pump keeps running
+    /// until `shutdown()` is called at app quit. Stopping the pump when
+    /// browser count hits zero crashes the app because CrBrowserMain's
+    /// internal threads continue to need the pump after on_before_close.
+    /// May be called from any thread — dispatches to main for safety.
+    func browserClosed() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.activeBrowserCount = max(0, self.activeBrowserCount - 1)
+            NSLog("[CEF] browserClosed: activeBrowserCount=%d", self.activeBrowserCount)
+        }
     }
 
     private func startMessagePump() {
         guard pumpTimer == nil else { return }
+        NSLog("[CEF] startMessagePump called\n  backtrace:\n%@", Thread.callStackSymbols.joined(separator: "\n"))
         var pumpCount: UInt64 = 0
         pumpTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             guard self?.initialized == true else { return }
@@ -143,6 +197,7 @@ class ChromiumManager {
         if let timer = pumpTimer {
             RunLoop.main.add(timer, forMode: .common)
         }
+        NSLog("[CEF] Message pump started")
     }
 
     func shutdown() {
