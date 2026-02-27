@@ -47,6 +47,24 @@ jobs:
             ghostty/zig-out/share
           key: libghostty-${{ runner.os }}-${{ hashFiles('.gitmodules', 'ghostty/**/*.zig', 'ghostty/**/*.zon', 'ghostty/build.zig', 'ghostty/build.zig.zon') }}
 
+      - name: Restore CEF cache
+        id: cache-cef
+        uses: actions/cache/restore@v4
+        with:
+          path: chromium
+          key: cef-${{ runner.os }}-${{ hashFiles('scripts/download-cef.sh') }}
+
+      - name: Download CEF
+        if: steps.cache-cef.outputs.cache-hit != 'true'
+        run: bash scripts/download-cef.sh
+
+      - name: Save CEF cache
+        if: steps.cache-cef.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: chromium
+          key: cef-${{ runner.os }}-${{ hashFiles('scripts/download-cef.sh') }}
+
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
