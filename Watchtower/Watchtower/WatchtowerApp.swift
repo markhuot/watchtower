@@ -85,6 +85,16 @@ struct WatchtowerApp: App {
                     activeViewModel?.fitPanesToWindow()
                 }
 
+                Button("Collapse Pane") {
+                    activeViewModel?.collapsePane()
+                }
+                .keyboardShortcut("-", modifiers: [.command, .shift])
+
+                Button("Expand Pane") {
+                    activeViewModel?.expandPane()
+                }
+                .keyboardShortcut("+", modifiers: [.command, .shift])
+
                 Divider()
 
                 // Browser navigation commands — disabled when focused pane is not a browser

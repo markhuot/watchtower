@@ -56,6 +56,7 @@ struct ContentView: View {
                         }
                     }
                     .padding(10)
+                    .frame(minWidth: geometry.size.width)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Scroll to the focused pane when entering focus mode
@@ -998,6 +999,22 @@ class PaneContainerViewModel: ObservableObject {
         guard let pane = contextualPane else { return }
         withAnimation(.easeInOut(duration: 0.2)) {
             pane.isCollapsed.toggle()
+        }
+    }
+
+    /// Collapse the currently focused pane (no-op if already collapsed).
+    func collapsePane() {
+        guard let pane = contextualPane, !pane.isCollapsed else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            pane.isCollapsed = true
+        }
+    }
+
+    /// Expand the currently focused pane (no-op if already expanded).
+    func expandPane() {
+        guard let pane = contextualPane, pane.isCollapsed else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            pane.isCollapsed = false
         }
     }
 
