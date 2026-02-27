@@ -618,8 +618,8 @@ All infrastructure and the core rendering pipeline are done:
 | 8. View routing in `TerminalPaneView` | **Done** | Branches on `browser.engine` |
 | 9. CEF integration (build) | **Done** | CEF framework linked/embedded, helper target, bridging header, search paths |
 | 10. `ChromiumManager` singleton | **Done** | Init, message pump (60Hz Timer), shutdown |
-| 11. `ChromiumBrowserView` (NSView) | **Partial** | Core works: loadRequest, goBack/Forward/Reload/Stop, focus, key equiv passthrough, performClose. Appearance sync (`syncAppearance`) working via `send_dev_tools_message` with raw JSON. Missing: close confirmation with `hasInteractedForms` (Feature F), collapsed-pane key handling (Feature G). |
-| 12. CEF client handlers | **Partial** | Life span handler, load handler (A), display handler (B), progress timer (C), appearance syncing (D) all working. DevTools observer for form detection (E) implemented but disabled — needs `execute_dev_tools_method` → `send_dev_tools_message` conversion for `Runtime.addBinding`. Missing: download handler. |
+| 11. `ChromiumBrowserView` (NSView) | **Done** | Core works: loadRequest, goBack/Forward/Reload/Stop, focus, key equiv passthrough, performClose with `hasInteractedForms` confirmation, `keyDown`/`keyUp` for collapsed panes, appearance sync via `send_dev_tools_message`. |
+| 12. CEF client handlers | **Partial** | Life span handler, load handler (A), display handler (B), progress timer (C), appearance syncing (D), form interaction JS injection (E) all working. Missing: download handler (H). |
 | 13. `ChromiumBrowserRepresentable` | **Done** | Uses `cef_browser_host_create_browser_sync`. Generation-based navigation. |
 | 16. Scroll forwarding | **Done** | `ContentView.swift` checks `ChromiumBrowserView` in addition to `WKWebView` |
 | 17. `findBrowserEngineView` utility | **Done** | Updated in `ContentView.swift` |
@@ -660,34 +660,32 @@ Implemented and verified working. Uses DevTools Protocol `Emulation.setEmulatedM
 1. `ChromiumBrowserView.loadPendingURLIfNeeded()` — called by `on_after_created` when the browser is first ready
 2. `ChromiumBrowserRepresentable.updateNSView` — called on theme changes, with `lastSyncedIsDark: Bool?` on Coordinator for change detection
 
-#### E. Form Interaction JS Injection — IMPLEMENTED BUT DISABLED
+#### E. Form Interaction JS Injection — DONE
 
 **File:** `CEFClientHandlers.swift`
 
-Implementation exists using DevTools Protocol `Runtime.addBinding` approach (not the document title hack):
-1. `cefSetupDevToolsObserver` — registers a `cef_dev_tools_message_observer_t` via `host.add_dev_tools_message_observer` and calls `Runtime.addBinding` with binding name `"watchtowerFormInteraction"`.
+Implemented and verified working. Uses DevTools Protocol `Runtime.addBinding` approach (not the document title hack):
+1. `cefSetupDevToolsObserver` — registers a `cef_dev_tools_message_observer_t` via `host.add_dev_tools_message_observer` and calls `Runtime.addBinding` with binding name `"watchtowerFormInteraction"` via `send_dev_tools_message` with raw JSON.
 2. `cefInjectFormDetectionJS` — injects form detection JS in `on_load_end` via `cef_frame_t.execute_java_script`. The JS listens for input/textarea/select events and calls `watchtowerFormInteraction("formInteraction")`.
 3. Observer's `on_dev_tools_event` callback receives `Runtime.bindingCalled` events and sets `hasInteractedForms = true`.
 
-Currently disabled: `cefSetupDevToolsObserver` has an early return at line 347, and the `cefInjectFormDetectionJS` call is commented out at line 242 in `on_load_end`.
-
-**CRITICAL:** The `Runtime.addBinding` call inside `cefSetupDevToolsObserver` still uses `execute_dev_tools_method` with `cef_dictionary_value_create` — this MUST be converted to `send_dev_tools_message` with raw JSON (same pattern as the fixed `syncAppearance` in Feature D) before re-enabling, or it will crash.
-
 Key details: `cef_dev_tools_message_observer_t` is allocated client-side via `cefCreate()`. `add_dev_tools_message_observer` returns a `cef_registration_t*` that must be held alive. The `on_dev_tools_event` callback receives `method` as `cef_string_t*` and `params` as `const void*` (UTF-8 JSON bytes) with `params_size`. The header `cef_devtools_message_observer_capi.h` is transitively included via `cef_browser_capi.h`.
 
-#### F. Close Confirmation with `hasInteractedForms` — NOT STARTED
+**Critical fix applied:** The original `Runtime.addBinding` call used `execute_dev_tools_method` with `cef_dictionary_value_create`, which would crash (same as Feature D). Converted to `send_dev_tools_message` with raw JSON: `{"id":2,"method":"Runtime.addBinding","params":{"name":"watchtowerFormInteraction"}}`.
+
+#### F. Close Confirmation with `hasInteractedForms` — DONE
 
 **File:** `ChromiumBrowserView.swift`
 
-Add a confirmation dialog to `ChromiumBrowserView.performClose` that checks `browser.hasInteractedForms` before closing, mirroring the WebKit behavior in `BrowserWebView.swift` (`WatchtowerWebView.performClose`). If the user has interacted with forms on the page, show an alert asking them to confirm they want to close the pane and lose unsaved form data.
+Implemented to mirror WebKit's behavior in `BrowserWebView.swift` (`WatchtowerWebView.performClose`). When closing a browser pane with `hasInteractedForms == true`, an `NSAlert` sheet asks the user to confirm: "Close Browser Pane?" / "There are unsaved changes on this page that will be lost." with Close and Cancel buttons.
 
-#### G. Key Event Handling for Collapsed Panes — NOT STARTED
+#### G. Key Event Handling for Collapsed Panes — DONE
 
 **File:** `ChromiumBrowserView.swift`
 
-Currently missing `keyDown(with:)` and `keyUp(with:)` overrides that match `WatchtowerWebView`'s behavior:
+Implemented and verified working. Added `keyDown(with:)` and `keyUp(with:)` overrides matching `WatchtowerWebView`'s behavior:
 - When collapsed, swallow all key events
-- Enter/Return/Space expands the pane
+- Enter (keyCode 36), numpad Enter (keyCode 76), or Space (keyCode 49) expands the pane
 - `keyUp` is also swallowed when collapsed
 
 #### H. Download Handler (`cef_download_handler_t`) — LOW PRIORITY
@@ -835,10 +833,10 @@ PBXProj IDs use sequential human-readable IDs with prefix `AA`:
 | `BrowserEngineView.swift` | Create | **Done** | `BrowserEngineView` protocol defining the interface both engines implement. |
 | `SettingsView.swift` | Create | **Done** | Settings window with General tab containing the engine picker, backed by `WatchtowerConfig`. |
 | `ChromiumManager.swift` | Create | **Done** | Singleton for lazy CEF initialization, message loop integration, shutdown. |
-| `ChromiumBrowserView.swift` | Create | **Partial** | Core works (load, navigate, focus, key equiv, close). Appearance sync working via `send_dev_tools_message` with raw JSON. Missing: close confirmation with `hasInteractedForms` (Feature F), collapsed-pane key handling (Feature G). |
+| `ChromiumBrowserView.swift` | Create | **Done** | Core works (load, navigate, focus, key equiv, close). Appearance sync via `send_dev_tools_message`. Close confirmation with `hasInteractedForms`. `keyDown`/`keyUp` for collapsed panes. |
 | `ChromiumBrowserRepresentable.swift` | Create | **Done** | `NSViewRepresentable` wrapper using `cef_browser_host_create_browser_sync`. Appearance sync in `updateNSView` with `lastSyncedIsDark` change detection working. |
 | `CEFHelpers.swift` | Create | **Done** | `CEFRefCount`, `cefCreate<T>()`, string conversion, userdata helpers. |
-| `CEFClientHandlers.swift` | Create | **Partial** | Life span, load, display handlers and progress timer all working. DevTools observer for form detection implemented but disabled — needs `execute_dev_tools_method` → `send_dev_tools_message` conversion. Missing: download handler. |
+| `CEFClientHandlers.swift` | Create | **Partial** | Life span, load, display handlers, progress timer, and DevTools observer for form interaction all working. Missing: download handler. |
 | `CefApplication.swift` | Create | **Done** | `CefNSApplication` with CefAppProtocol conformance. |
 | `main.swift` | Create | **Done** | Entry point: NSApplication init, signal handlers, atexit, CEF eager init. |
 | `WatchtowerHelper/main.c` | Create | **Done** | Helper app entry point calling `cef_execute_process()`. |

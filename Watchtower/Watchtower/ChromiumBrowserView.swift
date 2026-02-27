@@ -124,6 +124,22 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
 
     // MARK: - Key Event Passthrough (keep for pane navigation)
 
+    override func keyDown(with event: NSEvent) {
+        // When collapsed, swallow all key events. Enter/Return/Space expands the pane.
+        if let browser = browser, browser.isCollapsed {
+            if event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 49 { // Return, Enter, or Space
+                browser.viewModel?.toggleCollapsePane()
+            }
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func keyUp(with event: NSEvent) {
+        if let browser = browser, browser.isCollapsed { return }
+        super.keyUp(with: event)
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
         if let browser = browser, browser.isCollapsed { return false }
@@ -152,15 +168,40 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
             window?.performClose(sender)
             return
         }
+
+        // Count all panes (terminals + browsers) via the view model.
         let totalPanes = browser.viewModel?.panes.count ?? 0
+
         if totalPanes > 1 {
-            NotificationCenter.default.post(
-                name: .browserPaneClosed,
-                object: nil,
-                userInfo: ["paneId": browser.id]
-            )
+            // Multiple panes — close just this one.
+            if browser.hasInteractedForms {
+                guard let window = self.window else { return }
+                let alert = NSAlert()
+                alert.messageText = "Close Browser Pane?"
+                alert.informativeText = "There are unsaved changes on this page that will be lost."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Close")
+                alert.addButton(withTitle: "Cancel")
+                alert.beginSheetModal(for: window) { response in
+                    if response == .alertFirstButtonReturn {
+                        NotificationCenter.default.post(
+                            name: .browserPaneClosed,
+                            object: nil,
+                            userInfo: ["paneId": browser.id]
+                        )
+                    }
+                }
+            } else {
+                NotificationCenter.default.post(
+                    name: .browserPaneClosed,
+                    object: nil,
+                    userInfo: ["paneId": browser.id]
+                )
+            }
         } else {
-            window?.performClose(sender)
+            // Single pane — let the window close normally.
+            guard let window = self.window else { return }
+            window.performClose(sender)
         }
     }
 

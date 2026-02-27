@@ -238,8 +238,7 @@ private func cefMakeLoadHandler(context: CEFClientContext) -> UnsafeMutablePoint
         let frameUrl = cefStringUserfreeToSwift(frame.pointee.get_url?(frame))
 
         // Inject form interaction detection JavaScript.
-        // DEBUG: skip to isolate crash
-        // cefInjectFormDetectionJS(frame: frame)
+        cefInjectFormDetectionJS(frame: frame)
 
         DispatchQueue.main.async {
             ctx.progressTimer?.invalidate()
@@ -342,9 +341,6 @@ private func cefMakeDisplayHandler(context: CEFClientContext) -> UnsafeMutablePo
 ///
 /// Called from `on_after_created` once the browser is available.
 func cefSetupDevToolsObserver(context: CEFClientContext, browser: UnsafeMutablePointer<cef_browser_t>) {
-    // DEBUG: skip entirely to isolate crash
-    NSLog("[CEF] cefSetupDevToolsObserver: SKIPPED (debug)")
-    return
     guard let host = browser.pointee.get_host?(browser) else {
         NSLog("[CEF] cefSetupDevToolsObserver: could not get browser host")
         return
@@ -400,19 +396,19 @@ func cefSetupDevToolsObserver(context: CEFClientContext, browser: UnsafeMutableP
     context.devToolsObserver = observer
     context.devToolsRegistration = registration
 
-    // 3. Call Runtime.addBinding to register the JS function
-    guard let bindingParams = cef_dictionary_value_create() else { return }
-    withCEFString("name") { nameKey in
-        withCEFString("watchtowerFormInteraction") { nameValue in
-            _ = bindingParams.pointee.set_string?(bindingParams, &nameKey, &nameValue)
-        }
+    // 3. Call Runtime.addBinding to register the JS function via raw JSON
+    //    (Using send_dev_tools_message instead of execute_dev_tools_method
+    //     to avoid crashes from nested cef_dictionary_value_t construction)
+    let json = """
+    {"id":2,"method":"Runtime.addBinding","params":{"name":"watchtowerFormInteraction"}}
+    """
+    let jsonData = Array(json.utf8)
+    let result = jsonData.withUnsafeBufferPointer { buf -> Int32 in
+        guard let base = buf.baseAddress else { return 0 }
+        return host.pointee.send_dev_tools_message?(host, base, jsonData.count) ?? 0
     }
-    withCEFString("Runtime.addBinding") { methodStr in
-        _ = host.pointee.execute_dev_tools_method?(host, 0, &methodStr, bindingParams)
-    }
-    _ = bindingParams.pointee.base.release?(&bindingParams.pointee.base)
 
-    NSLog("[CEF] DevTools observer registered and Runtime.addBinding called")
+    NSLog("[CEF] DevTools observer registered, Runtime.addBinding send_dev_tools_message returned \(result)")
 }
 
 // MARK: - Form Detection JS Injection
