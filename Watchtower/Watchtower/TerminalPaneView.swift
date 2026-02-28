@@ -213,6 +213,7 @@ struct PaneView: View {
         .animation(.easeInOut(duration: 0.15), value: pane.hasBell)
         .animation(.easeOut(duration: 0.15), value: viewModel.commandPalettePaneId)
         .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
+        .accessibilityIdentifier("pane")
     }
 }
 
