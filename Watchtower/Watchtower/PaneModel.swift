@@ -44,6 +44,11 @@ class PaneModel: Identifiable, ObservableObject {
     /// the pane has been focused for 1 second.
     @Published var hasBell: Bool = false
 
+    /// Custom header background color for this pane. When `nil`, the
+    /// default theme background is used. Set via the command palette's
+    /// "Set Pane Color" action.
+    @Published var headerColor: Color? = nil
+
     /// Weak reference to the parent view model, used by NSViews to check
     /// `pendingFocus` in `viewDidMoveToWindow`. Set when the pane is added
     /// to the view model's `panes` array.

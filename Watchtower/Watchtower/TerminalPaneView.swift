@@ -230,6 +230,14 @@ struct CollapsedPaneContent: View {
     var onHeaderTapped: (() -> Void)? = nil
     var onHeaderDoubleTapped: (() -> Void)? = nil
 
+    /// Text color for the collapsed strip, adapting to custom pane background color.
+    private var effectiveTextColor: Color {
+        if let headerColor = pane.headerColor {
+            return GhosttyAppManager.textColor(for: headerColor)
+        }
+        return appManager.headerTextColor
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Status circle at the top — left-aligned with the same 12px
@@ -253,7 +261,7 @@ struct CollapsedPaneContent: View {
         .overlay(alignment: .topLeading) {
             Text(pane.title)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(appManager.headerTextColor.opacity(0.7))
+                .foregroundColor(effectiveTextColor.opacity(0.7))
                 .lineLimit(1)
                 .fixedSize()
                 .rotationEffect(.degrees(90), anchor: .topLeading)
@@ -264,7 +272,28 @@ struct CollapsedPaneContent: View {
                 // to center it horizontally in the ~40px strip.
                 .offset(x: 27, y: 42)
         }
-        .background(appManager.backgroundColor.opacity(0.8))
+        .background(
+            Group {
+                if let headerColor = pane.headerColor {
+                    VStack(spacing: 0) {
+                        LinearGradient(
+                            stops: [
+                                .init(color: headerColor, location: 0.0),
+                                .init(color: headerColor, location: 0.8),
+                                .init(color: headerColor.opacity(0), location: 1.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 44)
+                        Color.clear
+                    }
+                    .background(appManager.backgroundColor.opacity(0.8))
+                } else {
+                    appManager.backgroundColor.opacity(0.8)
+                }
+            }
+        )
         .overlay(
             DragSourceView(
                 pane: pane,
@@ -280,6 +309,14 @@ struct PaneHeaderView: View {
     @ObservedObject var pane: PaneModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
     var onClose: (() -> Void)? = nil
+
+    /// Text color for the header, adapting to custom pane background color.
+    private var effectiveTextColor: Color {
+        if let headerColor = pane.headerColor {
+            return GhosttyAppManager.textColor(for: headerColor)
+        }
+        return appManager.headerTextColor
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -302,7 +339,7 @@ struct PaneHeaderView: View {
                 // Title (from terminal/browser)
                 Text(pane.title)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(appManager.headerTextColor.opacity(0.9))
+                    .foregroundColor(effectiveTextColor.opacity(0.9))
                     .lineLimit(1)
                 
                 Spacer()
@@ -311,7 +348,7 @@ struct PaneHeaderView: View {
                 if let subtitle = pane.subtitle {
                     Text(subtitle)
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundColor(appManager.headerTextColor.opacity(0.5))
+                        .foregroundColor(effectiveTextColor.opacity(0.5))
                         .lineLimit(1)
                 }
             }
@@ -323,7 +360,23 @@ struct PaneHeaderView: View {
             ProgressBarView(progress: pane.progress)
                 .frame(height: 4)
         }
-        .background(appManager.backgroundColor.opacity(0.8))
+        .background(
+            Group {
+                if let headerColor = pane.headerColor {
+                    LinearGradient(
+                        stops: [
+                            .init(color: headerColor, location: 0.0),
+                            .init(color: headerColor, location: 0.8),
+                            .init(color: headerColor.opacity(0), location: 1.0)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                } else {
+                    appManager.backgroundColor.opacity(0.8)
+                }
+            }
+        )
     }
 }
 

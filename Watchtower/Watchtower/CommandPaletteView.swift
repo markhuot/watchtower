@@ -1,6 +1,54 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Palette Mode
+
+/// The current mode of the command palette.
+enum PaletteMode {
+    /// Normal command list.
+    case commands
+    /// Color picker sub-palette for "Set Pane Color".
+    case colorPicker
+}
+
+// MARK: - Hex Color Parsing
+
+/// Parse a hex color string into a SwiftUI Color.
+/// Accepts formats: #RGB, #RRGGBB, RGB, RRGGBB (with or without # prefix).
+func parseHexColor(_ text: String) -> Color? {
+    var hex = text.trimmingCharacters(in: .whitespaces)
+    if hex.hasPrefix("#") { hex.removeFirst() }
+
+    // Handle 3-digit hex
+    if hex.count == 3 && hex.allSatisfy({ $0.isHexDigit }) {
+        let chars = Array(hex)
+        hex = String(chars[0]) + String(chars[0])
+            + String(chars[1]) + String(chars[1])
+            + String(chars[2]) + String(chars[2])
+    }
+
+    guard hex.count == 6, hex.allSatisfy({ $0.isHexDigit }) else { return nil }
+    guard let value = UInt64(hex, radix: 16) else { return nil }
+
+    let r = Double((value >> 16) & 0xFF) / 255.0
+    let g = Double((value >> 8) & 0xFF) / 255.0
+    let b = Double(value & 0xFF) / 255.0
+    return Color(red: r, green: g, blue: b)
+}
+
+/// Normalize a hex color string to "#RRGGBB" format.
+func normalizeHex(_ text: String) -> String {
+    var hex = text.trimmingCharacters(in: .whitespaces)
+    if hex.hasPrefix("#") { hex.removeFirst() }
+    if hex.count == 3 {
+        let chars = Array(hex)
+        hex = String(chars[0]) + String(chars[0])
+            + String(chars[1]) + String(chars[1])
+            + String(chars[2]) + String(chars[2])
+    }
+    return "#\(hex.uppercased())"
+}
+
 // MARK: - Command Palette Item
 
 /// A single entry in the command palette's list.
@@ -15,6 +63,11 @@ struct CommandPaletteItem: Identifiable {
     let isQueryAction: Bool
     /// Preview text shown on the right side for query actions.
     let queryPreview: String?
+    /// Optional color swatch to display next to the item name (used by color picker).
+    let swatchColor: Color?
+    /// If non-nil, selecting this item transitions the palette to the given mode
+    /// instead of dismissing it.
+    let transitionsToMode: PaletteMode?
     /// The action closure receives the view model and a `forceNewPane` flag.
     /// When `forceNewPane` is true (Cmd+Return), browser-navigation actions
     /// should always open a new pane instead of navigating in-place.
@@ -33,6 +86,8 @@ struct CommandPaletteItem: Identifiable {
             sourceTag: nil,
             isQueryAction: false,
             queryPreview: nil,
+            swatchColor: nil,
+            transitionsToMode: nil,
             action: { vm, _ in action(vm) }
         )
     }
@@ -50,6 +105,8 @@ struct CommandPaletteItem: Identifiable {
             sourceTag: nil,
             isQueryAction: true,
             queryPreview: queryPreview,
+            swatchColor: nil,
+            transitionsToMode: nil,
             action: action
         )
     }
@@ -65,6 +122,8 @@ struct CommandPaletteItem: Identifiable {
             sourceTag: actionModel.isGlobal ? "[global]" : "[project]",
             isQueryAction: false,
             queryPreview: nil,
+            swatchColor: nil,
+            transitionsToMode: nil,
             action: { viewModel, _ in
                 viewModel.triggerAction(actionModel)
             }
@@ -80,6 +139,8 @@ struct CommandPaletteItem: Identifiable {
             sourceTag: "History",
             isQueryAction: false,
             queryPreview: nil,
+            swatchColor: nil,
+            transitionsToMode: nil,
             action: { viewModel, forceNewPane in
                 if !forceNewPane, let browser = viewModel.contextualPane as? BrowserPaneModel {
                     browser.navigationSource = "palette"
@@ -161,6 +222,8 @@ struct CommandPaletteView: View {
     @State private var computedFilteredItems: [FilteredPaletteItem] = []
     /// The filter task handle, cancelled and replaced on each keystroke.
     @State private var filterTask: Task<Void, Never>?
+    /// The current palette mode (commands vs color picker sub-palette).
+    @State private var mode: PaletteMode = .commands
 
     private let maxVisibleItems = 10
     private let cornerRadius: CGFloat = 8
@@ -171,7 +234,12 @@ struct CommandPaletteView: View {
     }
 
     /// Build the full command list from built-in commands + discovered actions.
+    /// In color picker mode, returns the color picker items instead.
     private var allItems: [CommandPaletteItem] {
+        if mode == .colorPicker {
+            return colorPickerItems
+        }
+
         var items: [CommandPaletteItem] = []
 
         // Built-in commands (always visible)
@@ -224,6 +292,17 @@ struct CommandPaletteView: View {
         items.append(.builtIn(name: "Fit Panes to Window") { vm in
             vm.fitPanesToWindow()
         })
+        items.append(CommandPaletteItem(
+            displayName: "Set Pane Color",
+            description: "Change the header color of the focused pane",
+            shortcutText: nil,
+            sourceTag: nil,
+            isQueryAction: false,
+            queryPreview: nil,
+            swatchColor: nil,
+            transitionsToMode: .colorPicker,
+            action: { _, _ in }
+        ))
 
         // Browser-specific commands (only when browser pane is focused)
         if isBrowserFocused {
@@ -292,6 +371,49 @@ struct CommandPaletteView: View {
         return items
     }
 
+    /// Build the color picker items: "Default" + 16 ANSI theme colors.
+    private var colorPickerItems: [CommandPaletteItem] {
+        var items: [CommandPaletteItem] = []
+
+        // "Default" resets to nil (theme background at 0.8 opacity)
+        items.append(CommandPaletteItem(
+            displayName: "Default",
+            description: "Theme background color",
+            shortcutText: nil,
+            sourceTag: nil,
+            isQueryAction: false,
+            queryPreview: nil,
+            swatchColor: appManager.backgroundColor.opacity(0.8),
+            transitionsToMode: nil,
+            action: { vm, _ in
+                if let pane = vm.contextualPane {
+                    pane.headerColor = nil
+                }
+            }
+        ))
+
+        // 16 ANSI colors from the ghostty theme
+        for entry in appManager.themeColors {
+            items.append(CommandPaletteItem(
+                displayName: entry.name,
+                description: nil,
+                shortcutText: nil,
+                sourceTag: nil,
+                isQueryAction: false,
+                queryPreview: nil,
+                swatchColor: entry.color,
+                transitionsToMode: nil,
+                action: { [color = entry.color] vm, _ in
+                    if let pane = vm.contextualPane {
+                        pane.headerColor = color
+                    }
+                }
+            ))
+        }
+
+        return items
+    }
+
     /// Kick off an async filter computation. Debounces by cancelling any
     /// in-flight task; the SQLite query and fuzzy matching run off the main
     /// thread so the UI stays responsive during rapid typing.
@@ -299,6 +421,7 @@ struct CommandPaletteView: View {
         filterTask?.cancel()
 
         let currentFilter = filterText
+        let currentMode = mode
         let items = allItems
 
         // Empty query — synchronous, no work to offload
@@ -324,7 +447,7 @@ struct CommandPaletteView: View {
 
             // --- Heavy work (off main thread) ---
 
-            // Fuzzy-match built-in commands & actions
+            // Fuzzy-match built-in commands & actions (or color picker items)
             var results: [FilteredPaletteItem] = []
             for item in items {
                 if Task.isCancelled { return }
@@ -348,93 +471,131 @@ struct CommandPaletteView: View {
                 }
             }
 
-            // Fuzzy-match history entries
-            let historyEntries = HistoryStore.shared.search(query: currentFilter, limit: 20)
-            for entry in historyEntries {
-                if Task.isCancelled { return }
-                let displayURL = entry.urlWithoutScheme
-                let urlMatch = fuzzyMatch(query: currentFilter, candidate: displayURL)
-                let titleMatch: FuzzyMatchResult?
-                if let title = entry.title {
-                    titleMatch = fuzzyMatch(query: currentFilter, candidate: title)
-                } else {
-                    titleMatch = nil
+            // History and query actions only in commands mode
+            if currentMode == .commands {
+                // Fuzzy-match history entries
+                let historyEntries = HistoryStore.shared.search(query: currentFilter, limit: 20)
+                for entry in historyEntries {
+                    if Task.isCancelled { return }
+                    let displayURL = entry.urlWithoutScheme
+                    let urlMatch = fuzzyMatch(query: currentFilter, candidate: displayURL)
+                    let titleMatch: FuzzyMatchResult?
+                    if let title = entry.title {
+                        titleMatch = fuzzyMatch(query: currentFilter, candidate: title)
+                    } else {
+                        titleMatch = nil
+                    }
+
+                    if urlMatch != nil || titleMatch != nil {
+                        let item = CommandPaletteItem.fromHistory(entry)
+                        var score = urlMatch?.score ?? ((titleMatch?.score ?? 0) - 100)
+                        score += HistoryStore.tiebreakerBonus(
+                            lastVisitedAt: entry.lastVisitedAt,
+                            visitCount: entry.visitCount
+                        )
+                        results.append(FilteredPaletteItem(
+                            id: item.id,
+                            item: item,
+                            nameMatch: urlMatch,
+                            descriptionMatch: titleMatch,
+                            score: score
+                        ))
+                    }
                 }
 
-                if urlMatch != nil || titleMatch != nil {
-                    let item = CommandPaletteItem.fromHistory(entry)
-                    var score = urlMatch?.score ?? ((titleMatch?.score ?? 0) - 100)
-                    score += HistoryStore.tiebreakerBonus(
-                        lastVisitedAt: entry.lastVisitedAt,
-                        visitCount: entry.visitCount
-                    )
+                if Task.isCancelled { return }
+
+                // Sort
+                results.sort {
+                    if $0.score != $1.score { return $0.score > $1.score }
+                    return $0.item.displayName.count < $1.item.displayName.count
+                }
+
+                // Append query actions (Go to URL / Search the web)
+                let queryText = currentFilter.trimmingCharacters(in: .whitespaces)
+                if !queryText.isEmpty {
+                    let urlLike = isURLLike(queryText)
+
+                    let goToURL = CommandPaletteItem.queryAction(
+                        name: "Go to URL"
+                    ) { vm, forceNewPane in
+                        guard let url = normalizeURL(queryText) else { return }
+                        if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
+                            browser.navigationSource = "address"
+                            browser.navigate(to: url)
+                        } else {
+                            let browser = vm.addBrowser(url: url)
+                            browser.navigationSource = "address"
+                            vm.focusPane(browser)
+                        }
+                    }
+
+                    let searchWeb = CommandPaletteItem.queryAction(
+                        name: "Search the web"
+                    ) { vm, forceNewPane in
+                        let encoded = queryText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? queryText
+                        guard let url = URL(string: "https://duckduckgo.com/?q=\(encoded)") else { return }
+                        if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
+                            browser.navigate(to: url)
+                        } else {
+                            let browser = vm.addBrowser(url: url)
+                            vm.focusPane(browser)
+                        }
+                    }
+
+                    let firstAction = urlLike ? goToURL : searchWeb
+                    let secondAction = urlLike ? searchWeb : goToURL
+
                     results.append(FilteredPaletteItem(
-                        id: item.id,
-                        item: item,
-                        nameMatch: urlMatch,
-                        descriptionMatch: titleMatch,
-                        score: score
+                        id: firstAction.id,
+                        item: firstAction,
+                        nameMatch: nil,
+                        descriptionMatch: nil,
+                        score: -1000
+                    ))
+                    results.append(FilteredPaletteItem(
+                        id: secondAction.id,
+                        item: secondAction,
+                        nameMatch: nil,
+                        descriptionMatch: nil,
+                        score: -1001
                     ))
                 }
-            }
-
-            if Task.isCancelled { return }
-
-            // Sort
-            results.sort {
-                if $0.score != $1.score { return $0.score > $1.score }
-                return $0.item.displayName.count < $1.item.displayName.count
-            }
-
-            // Append query actions (Go to URL / Search the web)
-            let queryText = currentFilter.trimmingCharacters(in: .whitespaces)
-            if !queryText.isEmpty {
-                let urlLike = isURLLike(queryText)
-
-                let goToURL = CommandPaletteItem.queryAction(
-                    name: "Go to URL"
-                ) { vm, forceNewPane in
-                    guard let url = normalizeURL(queryText) else { return }
-                    if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
-                        browser.navigationSource = "address"
-                        browser.navigate(to: url)
-                    } else {
-                        let browser = vm.addBrowser(url: url)
-                        browser.navigationSource = "address"
-                        vm.focusPane(browser)
-                    }
+            } else if currentMode == .colorPicker {
+                // Sort color picker results
+                results.sort {
+                    if $0.score != $1.score { return $0.score > $1.score }
+                    return $0.item.displayName.count < $1.item.displayName.count
                 }
 
-                let searchWeb = CommandPaletteItem.queryAction(
-                    name: "Search the web"
-                ) { vm, forceNewPane in
-                    let encoded = queryText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? queryText
-                    guard let url = URL(string: "https://duckduckgo.com/?q=\(encoded)") else { return }
-                    if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
-                        browser.navigate(to: url)
-                    } else {
-                        let browser = vm.addBrowser(url: url)
-                        vm.focusPane(browser)
-                    }
+                // In color picker mode, offer a custom hex color if the filter
+                // text parses as a valid hex color
+                let queryText = currentFilter.trimmingCharacters(in: .whitespaces)
+                if let parsedColor = parseHexColor(queryText) {
+                    let hexLabel = normalizeHex(queryText)
+                    let hexItem = CommandPaletteItem(
+                        displayName: "Custom: \(hexLabel)",
+                        description: nil,
+                        shortcutText: nil,
+                        sourceTag: nil,
+                        isQueryAction: true,
+                        queryPreview: nil,
+                        swatchColor: parsedColor,
+                        transitionsToMode: nil,
+                        action: { vm, _ in
+                            if let pane = vm.contextualPane {
+                                pane.headerColor = parsedColor
+                            }
+                        }
+                    )
+                    results.append(FilteredPaletteItem(
+                        id: hexItem.id,
+                        item: hexItem,
+                        nameMatch: nil,
+                        descriptionMatch: nil,
+                        score: -1000
+                    ))
                 }
-
-                let firstAction = urlLike ? goToURL : searchWeb
-                let secondAction = urlLike ? searchWeb : goToURL
-
-                results.append(FilteredPaletteItem(
-                    id: firstAction.id,
-                    item: firstAction,
-                    nameMatch: nil,
-                    descriptionMatch: nil,
-                    score: -1000
-                ))
-                results.append(FilteredPaletteItem(
-                    id: secondAction.id,
-                    item: secondAction,
-                    nameMatch: nil,
-                    descriptionMatch: nil,
-                    score: -1001
-                ))
             }
 
             if Task.isCancelled { return }
@@ -472,13 +633,25 @@ struct CommandPaletteView: View {
             // Search field
             CommandPaletteTextField(
                 text: $filterText,
+                placeholder: mode == .colorPicker
+                    ? "Pick a color or enter hex (#RRGGBB)\u{2026}"
+                    : "Filter commands\u{2026}",
                 selectAllOnAppear: viewModel.commandPaletteInitialText != nil,
                 onArrowUp: { moveSelection(by: -1) },
                 onArrowDown: { moveSelection(by: 1) },
                 onJumpUp: { jumpSectionUp() },
                 onJumpDown: { jumpSectionDown() },
                 onSubmit: { forceNewPane in executeSelected(forceNewPane: forceNewPane) },
-                onEscape: { viewModel.dismissCommandPalette() }
+                onEscape: {
+                    if mode == .colorPicker {
+                        // Go back to commands mode instead of dismissing
+                        mode = .commands
+                        filterText = ""
+                        selectedIndex = 0
+                    } else {
+                        viewModel.dismissCommandPalette()
+                    }
+                }
             )
             .padding(.horizontal, 22)
             .padding(.vertical, 10)
@@ -489,7 +662,7 @@ struct CommandPaletteView: View {
             // Results list
             if visibleItems.isEmpty {
                 HStack {
-                    Text("No matching commands")
+                    Text(mode == .colorPicker ? "No matching colors" : "No matching commands")
                         .foregroundColor(.white.opacity(0.4))
                         .font(.system(size: 13))
                     Spacer()
@@ -569,6 +742,10 @@ struct CommandPaletteView: View {
             selectedIndex = 0
             scheduleFilter()
         }
+        .onChange(of: mode) { _ in
+            // Re-compute items when switching between commands and color picker
+            scheduleFilter()
+        }
     }
 
     private func moveSelection(by offset: Int) {
@@ -604,6 +781,16 @@ struct CommandPaletteView: View {
     private func executeSelected(forceNewPane: Bool = false) {
         guard selectedIndex >= 0 && selectedIndex < visibleItems.count else { return }
         let item = visibleItems[selectedIndex].item
+
+        // If this item transitions to a sub-palette mode, switch mode
+        // and stay open instead of running the action and dismissing.
+        if let targetMode = item.transitionsToMode {
+            mode = targetMode
+            filterText = ""
+            selectedIndex = 0
+            return
+        }
+
         // Snapshot the focus generation before the action runs.
         // If the action calls focusPane(), the generation advances and
         // dismiss will preserve the action's focus target.
@@ -631,6 +818,18 @@ struct CommandPaletteRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Color swatch for color picker items
+            if let swatch = item.item.swatchColor {
+                Circle()
+                    .fill(swatch)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
+                    )
+                    .frame(width: 14, height: 14)
+                    .padding(.trailing, 8)
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 // Name with highlighted matched characters, truncated to one line
                 let nameTruncation = truncatedDisplayText(
@@ -796,6 +995,7 @@ struct CommandPaletteRow: View {
 /// and key event interception.
 struct CommandPaletteTextField: NSViewRepresentable {
     @Binding var text: String
+    var placeholder: String = "Filter commands\u{2026}"
     var selectAllOnAppear: Bool = false
     var onArrowUp: () -> Void
     var onArrowDown: () -> Void
@@ -825,7 +1025,7 @@ struct CommandPaletteTextField: NSViewRepresentable {
         textView.allowsUndo = true
 
         // Placeholder support is handled via the custom subclass
-        textView.placeholderString = "Filter commands\u{2026}"
+        textView.placeholderString = placeholder
 
         // Pre-fill text if provided (e.g. browser URL from Cmd+L)
         if !text.isEmpty {
@@ -854,6 +1054,10 @@ struct CommandPaletteTextField: NSViewRepresentable {
         if nsView.string != text {
             nsView.string = text
             nsView.invalidateIntrinsicContentSize()
+        }
+        if nsView.placeholderString != placeholder {
+            nsView.placeholderString = placeholder
+            nsView.needsDisplay = true
         }
     }
 

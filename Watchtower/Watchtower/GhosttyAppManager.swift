@@ -4,6 +4,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 import os
 
+/// A named color entry from the Ghostty theme palette.
+struct PaletteColorEntry: Identifiable {
+    let id: Int      // palette index (0–15)
+    let name: String  // e.g. "Red", "Bright Cyan"
+    let color: Color
+}
+
 /// Singleton that manages the Ghostty app-level state (ghostty_app_t).
 /// This is the equivalent of Ghostty.App from the reference implementation,
 /// simplified for Watchtower's needs.
@@ -34,6 +41,9 @@ class GhosttyAppManager: ObservableObject {
 
     /// Foreground color from Ghostty config, used for subtle UI elements like unfocused pane borders.
     @Published private(set) var foregroundColor: Color = Color(white: 0.9)
+
+    /// The 16 ANSI palette colors from the Ghostty theme (indices 0–15).
+    @Published private(set) var themeColors: [PaletteColorEntry] = []
 
     /// Text color for pane headers, computed from the background luminance.
     /// Returns white for dark backgrounds, black for light backgrounds, with
@@ -193,6 +203,9 @@ class GhosttyAppManager: ObservableObject {
 
         // Read foreground color for subtle UI elements
         self.foregroundColor = Self.readForegroundColor(from: cfg)
+
+        // Read the 16 ANSI palette colors for the color picker
+        self.themeColors = Self.readThemeColors(from: cfg)
 
         Self.logger.info("GhosttyAppManager initialized successfully")
     }
@@ -478,6 +491,22 @@ class GhosttyAppManager: ObservableObject {
 
     // MARK: - Theme Colors
 
+    /// Compute an appropriate text color (white or black) for the given
+    /// background color, using WCAG 2.0 relative luminance.
+    static func textColor(for bgColor: Color) -> Color {
+        guard let nsColor = NSColor(bgColor).usingColorSpace(.sRGB) else {
+            return .white
+        }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        nsColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        func linearize(_ c: CGFloat) -> CGFloat {
+            c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        let luminance = 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
+        let brightness = 1.0 - min(max(luminance / 0.36, 0), 1)
+        return Color(white: brightness)
+    }
+
     private static func readBackgroundColor(from config: ghostty_config_t) -> Color {
         var color = ghostty_config_color_s(r: 0, g: 0, b: 0)
         let key = "background"
@@ -545,6 +574,22 @@ class GhosttyAppManager: ObservableObject {
             green: Double(color.g) / 255,
             blue: Double(color.b) / 255
         )
+    }
+
+    /// Read the 16 standard ANSI palette colors (indices 0–15) with human-readable names.
+    private static func readThemeColors(from config: ghostty_config_t) -> [PaletteColorEntry] {
+        let names = [
+            "Black", "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan", "White",
+            "Bright Black", "Bright Red", "Bright Green", "Bright Yellow",
+            "Bright Blue", "Bright Magenta", "Bright Cyan", "Bright White"
+        ]
+        var entries: [PaletteColorEntry] = []
+        for i in 0..<16 {
+            if let color = readPaletteColor(from: config, index: i) {
+                entries.append(PaletteColorEntry(id: i, name: names[i], color: color))
+            }
+        }
+        return entries
     }
 
     private static func colorChange(
