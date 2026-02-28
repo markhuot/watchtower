@@ -56,7 +56,7 @@ struct ContentView: View {
                         }
                     }
                     .padding(10)
-                    .frame(minWidth: geometry.size.width)
+                    .frame(minWidth: viewModel.isFullScreen ? geometry.size.width : nil)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Scroll to the focused pane when entering focus mode
@@ -306,9 +306,9 @@ struct PaneWithHandle: View {
                 }, onHeaderDoubleTapped: {
                     if pane.isCollapsed {
                         viewModel.focusPane(id: pane.id)
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            pane.isCollapsed = false
-                        }
+                    }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        pane.isCollapsed.toggle()
                     }
                 })
                 .frame(width: effectiveWidth)
@@ -573,6 +573,9 @@ class PaneContainerViewModel: ObservableObject {
         commandPalettePaneId != nil
     }
 
+    /// Whether the window is in macOS native fullscreen mode.
+    @Published var isFullScreen: Bool = false
+
     /// Whether the action dialog is shown.
     @Published var showActionDialog: Bool = false
 
@@ -692,6 +695,14 @@ class PaneContainerViewModel: ObservableObject {
             self?.handleBrowserHorizontalScroll(event)
             return event  // always pass through — don't break WKWebView's vertical scrolling
         }
+
+        // Track macOS native fullscreen state
+        NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)
+            .sink { [weak self] _ in self?.isFullScreen = true }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)
+            .sink { [weak self] _ in self?.isFullScreen = false }
+            .store(in: &cancellables)
     }
 
     deinit {

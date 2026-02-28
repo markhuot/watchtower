@@ -144,12 +144,19 @@ struct PaneView: View {
                         GhosttyTerminalView(terminal: terminal, size: geo.size)
                     }
                 } else if let browser = pane as? BrowserPaneModel {
-                    switch browser.engine {
-                    case .webkit:
-                        WebKitBrowserView(browser: browser)
-                    case .chromium:
-                        ChromiumBrowserRepresentable(browser: browser)
+                    ZStack {
+                        switch browser.engine {
+                        case .webkit:
+                            WebKitBrowserView(browser: browser)
+                        case .chromium:
+                            ChromiumBrowserRepresentable(browser: browser)
+                        }
                     }
+                    // During pane drag reorder, block the browser from
+                    // intercepting the AppKit drag session. WKWebView and CEF
+                    // register as NSDraggingDestination which steals the drag,
+                    // preventing drops on neighboring panes.
+                    .allowsHitTesting(viewModel.draggedPaneId == nil)
                 }
             }
             .frame(width: pane.isCollapsed ? PaneModel.collapsedPaneWidth : nil)

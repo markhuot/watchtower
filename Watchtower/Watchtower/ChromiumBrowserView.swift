@@ -204,19 +204,10 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
         guard event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
         if let browser = browser, browser.isCollapsed { return false }
 
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-
-        if flags == [.command, .shift],
-           let chars = event.charactersIgnoringModifiers,
-           chars == "[" || chars == "]" {
-            return false
-        }
-
-        if flags == [.command],
-           let chars = event.charactersIgnoringModifiers,
-           chars == "l" {
-            return false
-        }
+        // Let all Watchtower app shortcuts pass through to the menu system
+        // instead of being consumed by CEF (e.g. Cmd+R for reload,
+        // Cmd+Shift+P for command palette, Cmd+L, pane navigation, etc.).
+        if isWatchtowerAppShortcut(event) { return false }
 
         return super.performKeyEquivalent(with: event)
     }

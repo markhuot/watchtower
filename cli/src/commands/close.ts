@@ -1,7 +1,7 @@
 import { sendCommand, getPaneId } from "../ipc.ts";
 
 function printUsage() {
-  console.log(`Usage: watchtower close [pane-id]
+  console.log(`Usage: watchtower close [options] [pane-id]
 
 Close a pane in the current Watchtower window.
 
@@ -10,16 +10,37 @@ Arguments:
                             the pane identified by WATCHTOWER_PANE_ID.
 
 Options:
+  --right                   Close all panes to the right of the focused pane
   --help, -h                Show this help message
 
 Examples:
   watchtower close
+  watchtower close --right
   watchtower close 123e4567-e89b-12d3-a456-426614174000`);
 }
 
 export async function closePane(args: string[]) {
   if (args.includes("--help") || args.includes("-h")) {
     printUsage();
+    return;
+  }
+
+  // Check for --right flag
+  if (args.includes("--right")) {
+    try {
+      const response = await sendCommand({
+        command: "close-panes-right",
+        paneId: getPaneId(),
+      });
+
+      if (!response.ok) {
+        console.error(`Error: ${response.error}`);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.error(`${(err as Error).message}`);
+      process.exit(1);
+    }
     return;
   }
 

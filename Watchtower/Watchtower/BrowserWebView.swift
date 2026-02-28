@@ -153,23 +153,10 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
         // propagate through the responder chain to the menu system.
         if let browser = browser, browser.isCollapsed { return false }
 
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-
-        // Let Cmd+Shift+[ and Cmd+Shift+] pass through to the menu system
-        // for pane navigation instead of being consumed by WebKit.
-        if flags == [.command, .shift],
-           let chars = event.charactersIgnoringModifiers,
-           chars == "[" || chars == "]" {
-            return false
-        }
-
-        // Let Cmd+L pass through to the menu system for the command palette
-        // instead of being consumed by WebKit's "focus address bar" handler.
-        if flags == [.command],
-           let chars = event.charactersIgnoringModifiers,
-           chars == "l" {
-            return false
-        }
+        // Let all Watchtower app shortcuts pass through to the menu system
+        // instead of being consumed by WebKit (e.g. Cmd+R for reload,
+        // Cmd+Shift+P for command palette, Cmd+L, pane navigation, etc.).
+        if isWatchtowerAppShortcut(event) { return false }
 
         return super.performKeyEquivalent(with: event)
     }
@@ -252,6 +239,14 @@ struct WebKitBrowserView: NSViewRepresentable {
         if #available(macOS 13.3, *) {
             webView.isInspectable = true
         }
+
+        // Set a Safari-like user agent so websites don't misidentify
+        // the embedded browser (WKWebView defaults to the host app's
+        // bundle name, which sites report as "Apple Mail").
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+        let osVersionString = "\(osVersion.majorVersion)_\(osVersion.minorVersion)_\(osVersion.patchVersion)"
+        let safariMajor = osVersion.majorVersion + 3 // macOS 15 → Safari 18, etc.
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X \(osVersionString)) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/\(safariMajor).0 Safari/605.1.15"
         webView.browser = browser
         browser.engineView = webView
         webView.navigationDelegate = context.coordinator

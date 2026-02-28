@@ -274,6 +274,44 @@ final class IPCServer {
             return handleNewBrowser(json, viewModel: viewModel)
         case "close-pane":
             return handleClosePane(json, viewModel: viewModel)
+        case "close-panes-right":
+            return handleClosePanesRight(json, viewModel: viewModel)
+        case "focus-next":
+            return handleFocusNext(viewModel: viewModel)
+        case "focus-previous":
+            return handleFocusPrevious(viewModel: viewModel)
+        case "focus-pane":
+            return handleFocusPane(json, viewModel: viewModel)
+        case "focus-mode":
+            return handleFocusMode(viewModel: viewModel)
+        case "move-pane-left":
+            return handleMovePaneLeft(viewModel: viewModel)
+        case "move-pane-right":
+            return handleMovePaneRight(viewModel: viewModel)
+        case "collapse-pane":
+            return handleCollapsePane(viewModel: viewModel)
+        case "expand-pane":
+            return handleExpandPane(viewModel: viewModel)
+        case "fit-panes":
+            return handleFitPanes(viewModel: viewModel)
+        case "go-back":
+            return handleGoBack(viewModel: viewModel)
+        case "go-forward":
+            return handleGoForward(viewModel: viewModel)
+        case "reload":
+            return handleReload(viewModel: viewModel)
+        case "navigate":
+            return handleNavigate(json, viewModel: viewModel)
+        case "switch-engine":
+            return handleSwitchEngine(json, viewModel: viewModel)
+        case "clear-history":
+            return handleClearHistory()
+        case "toggle-fullscreen":
+            return handleToggleFullscreen()
+        case "minimize":
+            return handleMinimize()
+        case "zoom":
+            return handleZoom()
         default:
             return ["ok": false, "error": "Unknown command: \(command)"]
         }
@@ -350,6 +388,151 @@ final class IPCServer {
         }
 
         viewModel.removePane(byId: paneId)
+        return ["ok": true]
+    }
+
+    private func handleClosePanesRight(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.closePanesToTheRight()
+        return ["ok": true]
+    }
+
+    // MARK: - Focus & Navigation
+
+    private func handleFocusNext(viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.focusNextPane()
+        return ["ok": true]
+    }
+
+    private func handleFocusPrevious(viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.focusPreviousPane()
+        return ["ok": true]
+    }
+
+    private func handleFocusPane(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
+        guard let targetIdStr = json["targetPaneId"] as? String,
+              let targetId = UUID(uuidString: targetIdStr) else {
+            return ["ok": false, "error": "Missing or invalid 'targetPaneId' field"]
+        }
+
+        guard let pane = viewModel.panes.first(where: { $0.id == targetId }) else {
+            return ["ok": false, "error": "Pane not found: \(targetIdStr)"]
+        }
+
+        viewModel.focusPane(pane)
+        return ["ok": true]
+    }
+
+    private func handleFocusMode(viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.toggleFocusMode()
+        return ["ok": true]
+    }
+
+    // MARK: - Pane Reordering
+
+    private func handleMovePaneLeft(viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.movePaneLeft()
+        return ["ok": true]
+    }
+
+    private func handleMovePaneRight(viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.movePaneRight()
+        return ["ok": true]
+    }
+
+    // MARK: - Collapse / Expand
+
+    private func handleCollapsePane(viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.collapsePane()
+        return ["ok": true]
+    }
+
+    private func handleExpandPane(viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.expandPane()
+        return ["ok": true]
+    }
+
+    // MARK: - Layout
+
+    private func handleFitPanes(viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.fitPanesToWindow()
+        return ["ok": true]
+    }
+
+    // MARK: - Browser Navigation
+
+    private func handleGoBack(viewModel: PaneContainerViewModel) -> [String: Any] {
+        guard let browser = viewModel.contextualPane as? BrowserPaneModel else {
+            return ["ok": false, "error": "Focused pane is not a browser"]
+        }
+        browser.goBack()
+        return ["ok": true]
+    }
+
+    private func handleGoForward(viewModel: PaneContainerViewModel) -> [String: Any] {
+        guard let browser = viewModel.contextualPane as? BrowserPaneModel else {
+            return ["ok": false, "error": "Focused pane is not a browser"]
+        }
+        browser.goForward()
+        return ["ok": true]
+    }
+
+    private func handleReload(viewModel: PaneContainerViewModel) -> [String: Any] {
+        guard let browser = viewModel.contextualPane as? BrowserPaneModel else {
+            return ["ok": false, "error": "Focused pane is not a browser"]
+        }
+        browser.reloadOrStop()
+        return ["ok": true]
+    }
+
+    private func handleNavigate(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
+        guard let browser = viewModel.contextualPane as? BrowserPaneModel else {
+            return ["ok": false, "error": "Focused pane is not a browser"]
+        }
+        guard let urlString = json["url"] as? String,
+              let url = URL(string: urlString) else {
+            return ["ok": false, "error": "Missing or invalid 'url' field"]
+        }
+        browser.navigate(to: url)
+        return ["ok": true]
+    }
+
+    private func handleSwitchEngine(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
+        guard let browser = viewModel.contextualPane as? BrowserPaneModel else {
+            return ["ok": false, "error": "Focused pane is not a browser"]
+        }
+        let targetEngine: BrowserEngine
+        if let engineStr = json["engine"] as? String,
+           let engine = BrowserEngine(rawValue: engineStr) {
+            targetEngine = engine
+        } else {
+            // Toggle: switch to the other engine
+            targetEngine = browser.engine == .webkit ? .chromium : .webkit
+        }
+        browser.switchEngine(to: targetEngine)
+        return ["ok": true, "engine": targetEngine.rawValue]
+    }
+
+    // MARK: - History
+
+    private func handleClearHistory() -> [String: Any] {
+        HistoryStore.shared.clearAll()
+        return ["ok": true]
+    }
+
+    // MARK: - Window Management
+
+    private func handleToggleFullscreen() -> [String: Any] {
+        NSApp.keyWindow?.toggleFullScreen(nil)
+        return ["ok": true]
+    }
+
+    private func handleMinimize() -> [String: Any] {
+        NSApp.keyWindow?.miniaturize(nil)
+        return ["ok": true]
+    }
+
+    private func handleZoom() -> [String: Any] {
+        NSApp.keyWindow?.zoom(nil)
         return ["ok": true]
     }
 }
