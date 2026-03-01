@@ -51,11 +51,19 @@ struct PaneView: View {
 
     /// The border color for the focus highlight, accounting for window activation state.
     /// When `hasBell` is true, the border uses the theme's bright red (palette 9).
-    /// The `.animation` modifier on the parent handles the smooth transition between
-    /// bell red and the normal highlight blue.
+    /// When `pane.headerColor` is set, that color replaces the default highlight color.
+    /// The `.animation` modifier on the parent handles the smooth transition.
     private var highlightBorderColor: Color {
         if pane.hasBell {
             return appManager.bellColor
+        } else if let custom = pane.headerColor {
+            if isHighlightActive {
+                return custom
+            } else if isHighlightDimmed {
+                return custom.opacity(0.3)
+            } else {
+                return custom.opacity(0.3)
+            }
         } else if isHighlightActive {
             return appManager.highlightColor
         } else if isHighlightDimmed {
@@ -72,6 +80,13 @@ struct PaneView: View {
         }
         if pane.hasBell {
             return appManager.bellColor.opacity(0.6)
+        }
+        if let custom = pane.headerColor {
+            if isHighlightActive {
+                return custom.opacity(0.6)
+            } else {
+                return Color.clear
+            }
         }
         if isHighlightActive {
             return appManager.highlightColor.opacity(0.6)
@@ -195,30 +210,6 @@ struct PaneView: View {
         .background(appManager.backgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .overlay(
-            // Inner glow — a top-edge gradient that washes the header area
-            // with the pane's custom color, fading to transparent. Sits
-            // beneath the focus highlight overlay so both are visible.
-            Group {
-                if let headerColor = pane.headerColor {
-                    VStack {
-                        LinearGradient(
-                            colors: [
-                                headerColor.opacity(0.45),
-                                headerColor.opacity(0.15),
-                                Color.clear
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(height: 88)
-                        Spacer()
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                }
-            }
-            .allowsHitTesting(false)
-        )
-        .overlay(
             RoundedRectangle(cornerRadius: cornerRadius)
                 .strokeBorder(
                     highlightBorderColor,
@@ -235,6 +226,7 @@ struct PaneView: View {
         .animation(.easeInOut(duration: 0.15), value: controlActiveState)
         .animation(.easeInOut(duration: 0.15), value: pane.isDragging)
         .animation(.easeInOut(duration: 0.15), value: pane.hasBell)
+        .animation(.easeInOut(duration: 0.15), value: pane.headerColor)
         .animation(.easeOut(duration: 0.15), value: viewModel.commandPalettePaneId)
         .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
         .accessibilityIdentifier("pane")
