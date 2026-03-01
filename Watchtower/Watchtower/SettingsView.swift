@@ -42,17 +42,15 @@ struct SettingsView: View {
                 Divider()
 
                 Toggle("Enable Chrome Debugging Protocol", isOn: $config.enableChromeDebugging)
-                if config.enableChromeDebugging {
-                    HStack {
-                        Text("Remote Debugging Port")
-                        Spacer()
-                        TextField("9222", value: $config.chromiumRemoteDebuggingPort, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 80)
-                            .multilineTextAlignment(.trailing)
-                    }
+                HStack {
+                    Text("Remote Debugging Port")
+                    Spacer()
+                    TextField("9222", value: $config.chromiumRemoteDebuggingPort, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
                 }
-                Text("Starts CEF with Chrome DevTools Protocol enabled on the specified port. Connect via chrome://inspect or any CDP client. Requires app restart to take effect.")
+                Text("Remote debugging is always active for in-pane DevTools (\"Inspect Element\"). Enable Chrome Debugging Protocol to also allow external CDP clients (chrome://inspect). Port changes require app restart.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

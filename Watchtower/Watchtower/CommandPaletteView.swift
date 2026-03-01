@@ -256,6 +256,12 @@ struct CommandPaletteView: View {
         items.append(.builtIn(name: "Close Panes to the Right") { vm in
             vm.closePanesToTheRight()
         })
+        items.append(.builtIn(name: "Close Other Panes") { vm in
+            vm.closeOtherPanes()
+        })
+        items.append(.builtIn(name: "Close All Panes") { vm in
+            vm.closeAllPanes()
+        })
 
         // Collapse / Expand toggle — label reflects the focused pane's current state
         if let focusedPane = viewModel.contextualPane {

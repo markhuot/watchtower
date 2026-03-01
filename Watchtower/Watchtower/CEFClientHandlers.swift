@@ -642,26 +642,69 @@ private func cefMakeContextMenuHandler(context: CEFClientContext) -> UnsafeMutab
     handler.pointee.on_context_menu_command = { (selfPtr, browser, frame, params, commandId, eventFlags) -> Int32 in
         guard commandId == kMenuIdInspectElement else { return 0 }
         guard let browser = browser else { return 0 }
-        guard let host = browser.pointee.get_host?(browser) else { return 0 }
-        defer { _ = host.pointee.base.release?(&host.pointee.base) }
+        guard let selfPtr = selfPtr else { return 0 }
+        guard let context = cefContextForHandler(UnsafeMutableRawPointer(selfPtr)) else { return 0 }
 
-        // Get the click coordinates for element-level inspection
-        var point = cef_point_t(x: 0, y: 0)
-        if let params = params {
-            point.x = Int32(params.pointee.get_xcoord?(params) ?? 0)
-            point.y = Int32(params.pointee.get_ycoord?(params) ?? 0)
+        let port = ChromiumManager.shared.initializedRemoteDebuggingPort
+
+        // If remote debugging is not available, fall back to popup window
+        guard port > 0 else {
+            guard let host = browser.pointee.get_host?(browser) else { return 0 }
+            defer { _ = host.pointee.base.release?(&host.pointee.base) }
+
+            var point = cef_point_t(x: 0, y: 0)
+            if let params = params {
+                point.x = Int32(params.pointee.get_xcoord?(params) ?? 0)
+                point.y = Int32(params.pointee.get_ycoord?(params) ?? 0)
+            }
+            var windowInfo = cef_window_info_t()
+            memset(&windowInfo, 0, MemoryLayout<cef_window_info_t>.size)
+            windowInfo.size = MemoryLayout<cef_window_info_t>.size
+            var settings = cef_browser_settings_t()
+            memset(&settings, 0, MemoryLayout<cef_browser_settings_t>.size)
+            settings.size = MemoryLayout<cef_browser_settings_t>.size
+            host.pointee.show_dev_tools?(host, &windowInfo, nil, &settings, &point)
+            return 1
         }
 
-        // Open DevTools in a new popup window
-        var windowInfo = cef_window_info_t()
-        memset(&windowInfo, 0, MemoryLayout<cef_window_info_t>.size)
-        windowInfo.size = MemoryLayout<cef_window_info_t>.size
+        // Fetch targets from remote debugging endpoint and open DevTools in an adjacent pane
+        let currentURL = context.browserModel?.url.absoluteString ?? ""
+        let targetURL = URL(string: "http://localhost:\(port)/json")!
+        let task = URLSession.shared.dataTask(with: targetURL) { data, response, error in
+            guard let data = data,
+                  let targets = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                logger.error("Failed to fetch DevTools targets from localhost:\(port)/json: \(error?.localizedDescription ?? "unknown")")
+                return
+            }
 
-        var settings = cef_browser_settings_t()
-        memset(&settings, 0, MemoryLayout<cef_browser_settings_t>.size)
-        settings.size = MemoryLayout<cef_browser_settings_t>.size
+            // Find matching target by URL, falling back to first page target
+            let matchingTarget = targets.first(where: { target in
+                guard let type = target["type"] as? String, type == "page" else { return false }
+                guard let url = target["url"] as? String else { return false }
+                return url == currentURL
+            }) ?? targets.first(where: { $0["type"] as? String == "page" })
 
-        host.pointee.show_dev_tools?(host, &windowInfo, nil, &settings, &point)
+            guard let target = matchingTarget,
+                  let targetId = target["id"] as? String else {
+                logger.error("No matching DevTools target found for URL: \(currentURL)")
+                return
+            }
+
+            // Construct the DevTools frontend URL from the target ID.
+            // CEF's devtoolsFrontendUrl field uses a devtools:// scheme that
+            // can't be loaded in a browser pane, so we build the HTTP URL directly.
+            let devToolsURL = URL(string: "http://localhost:\(port)/devtools/inspector.html?ws=localhost:\(port)/devtools/page/\(targetId)")!
+
+            DispatchQueue.main.async {
+                guard let viewModel = context.browserModel?.viewModel else { return }
+                // Use WebKit for the DevTools pane — CEF drops the WebSocket
+                // connection when the frontend runs inside CEF itself.
+                let devToolsPane = viewModel.addBrowser(url: devToolsURL, engine: .webkit)
+                viewModel.focusPane(devToolsPane)
+            }
+        }
+        task.resume()
+
         return 1
     }
 

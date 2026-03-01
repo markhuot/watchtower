@@ -277,6 +277,10 @@ final class IPCServer {
             return handleClosePane(json, viewModel: viewModel)
         case "close-panes-right":
             return handleClosePanesRight(json, viewModel: viewModel)
+        case "close-other-panes":
+            return handleCloseOtherPanes(json, viewModel: viewModel)
+        case "close-all-panes":
+            return handleCloseAllPanes(json, viewModel: viewModel)
         case "focus-next":
             return handleFocusNext(viewModel: viewModel)
         case "focus-previous":
@@ -383,6 +387,16 @@ final class IPCServer {
 
     private func handleClosePanesRight(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
         viewModel.closePanesToTheRight()
+        return ["ok": true]
+    }
+
+    private func handleCloseOtherPanes(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.closeOtherPanes()
+        return ["ok": true]
+    }
+
+    private func handleCloseAllPanes(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.closeAllPanes()
         return ["ok": true]
     }
 

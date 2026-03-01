@@ -118,10 +118,10 @@ class ChromiumManager {
         let helperPath = Bundle.main.bundlePath + "/Contents/Frameworks/Watchtower Helper.app/Contents/MacOS/Watchtower Helper"
         cefStringSet(helperPath, cefStr: &settings.browser_subprocess_path)
 
-        // Remote debugging port — only enabled when the user has toggled it on in Settings
-        let effectivePort = WatchtowerConfig.shared.enableChromeDebugging
-            ? WatchtowerConfig.shared.chromiumRemoteDebuggingPort
-            : 0
+        // Remote debugging port — always enabled so "Inspect Element" can open
+        // DevTools in an adjacent pane (like Chrome's docked DevTools).
+        // Uses the user's configured port (default 9222).
+        let effectivePort = WatchtowerConfig.shared.chromiumRemoteDebuggingPort
         settings.remote_debugging_port = Int32(effectivePort)
         initializedRemoteDebuggingPort = effectivePort
         settings.log_severity = LOGSEVERITY_VERBOSE

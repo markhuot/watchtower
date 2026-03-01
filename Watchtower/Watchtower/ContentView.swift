@@ -1120,6 +1120,111 @@ class PaneContainerViewModel: ObservableObject {
         }
     }
 
+    /// Close all panes except the currently focused one.
+    /// Does nothing if there is only one pane.
+    func closeOtherPanes() {
+        guard let focusedPane = contextualPane,
+              let currentIndex = panes.firstIndex(where: { $0.id == focusedPane.id }) else { return }
+
+        let otherPanes = panes.enumerated().filter { $0.offset != currentIndex }.map { $0.element }
+        guard !otherPanes.isEmpty else { return }
+
+        // Exit focus mode if the focus-mode target is one of the panes being removed
+        if let fmId = focusModePaneId,
+           otherPanes.contains(where: { $0.id == fmId }) {
+            exitFocusMode()
+        }
+
+        // Determine animation duration (hold Shift for slow-motion)
+        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
+
+        // Start close animation on all other panes
+        withAnimation(.easeIn(duration: duration)) {
+            for pane in otherPanes {
+                pane.animationDuration = duration
+                pane.isClosing = true
+            }
+        }
+
+        // Ensure the current pane is focused
+        focusPane(focusedPane)
+
+        // Initiate CEF close for any Chromium browser panes.
+        var chromiumPaneIds = Set<UUID>()
+        for pane in otherPanes {
+            if let browser = pane as? BrowserPaneModel,
+               browser.engine == .chromium,
+               !browser.isClosingCEF {
+                browser.isClosingCEF = true
+                if let chromiumView = browser.engineView as? ChromiumBrowserView {
+                    chromiumView.closeCEFBrowser()
+                }
+                chromiumPaneIds.insert(pane.id)
+            }
+        }
+
+        // Remove non-Chromium panes after the animation finishes.
+        let nonChromiumIds = otherPanes.filter { !chromiumPaneIds.contains($0.id) }.map { $0.id }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            guard let self = self else { return }
+            for id in nonChromiumIds {
+                if let index = self.panes.firstIndex(where: { $0.id == id }) {
+                    self.panes.remove(at: index)
+                }
+            }
+        }
+    }
+
+    /// Close all panes. A new empty terminal will be created automatically
+    /// by removePane when the last pane is removed.
+    func closeAllPanes() {
+        let allPanes = Array(panes)
+        guard !allPanes.isEmpty else { return }
+
+        // Exit focus mode
+        if focusModePaneId != nil {
+            exitFocusMode()
+        }
+
+        // Determine animation duration (hold Shift for slow-motion)
+        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
+
+        // Start close animation on all panes
+        withAnimation(.easeIn(duration: duration)) {
+            for pane in allPanes {
+                pane.animationDuration = duration
+                pane.isClosing = true
+            }
+        }
+
+        // Initiate CEF close for any Chromium browser panes.
+        var chromiumPaneIds = Set<UUID>()
+        for pane in allPanes {
+            if let browser = pane as? BrowserPaneModel,
+               browser.engine == .chromium,
+               !browser.isClosingCEF {
+                browser.isClosingCEF = true
+                if let chromiumView = browser.engineView as? ChromiumBrowserView {
+                    chromiumView.closeCEFBrowser()
+                }
+                chromiumPaneIds.insert(pane.id)
+            }
+        }
+
+        // Remove non-Chromium panes after the animation finishes.
+        let nonChromiumIds = allPanes.filter { !chromiumPaneIds.contains($0.id) }.map { $0.id }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            guard let self = self else { return }
+            for id in nonChromiumIds {
+                if let index = self.panes.firstIndex(where: { $0.id == id }) {
+                    self.panes.remove(at: index)
+                }
+            }
+        }
+    }
+
     /// Exit focus mode if it is currently active.
     func exitFocusMode() {
         guard isFocusMode else { return }
