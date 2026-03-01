@@ -36,4 +36,10 @@
 #include "include/internal/cef_types.h"
 #include "include/internal/cef_types_mac.h"
 
+// CefApplication.m helpers — allow Swift to signal user-initiated quit
+// before calling [NSApp terminate:nil], so the swizzled terminate: knows
+// to call through to the original implementation.
+void WatchtowerRequestQuit(void);
+BOOL WatchtowerIsQuitRequested(void);
+
 #endif /* GhosttyBridge_h */

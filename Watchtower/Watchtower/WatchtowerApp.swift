@@ -14,6 +14,19 @@ struct WatchtowerApp: App {
         }
         .defaultSize(width: 1960, height: 1000)
         .commands {
+            // Override the default Quit command so we can set
+            // WatchtowerRequestQuit() before calling terminate:.
+            // This is necessary because CefApplication.m swizzles terminate:
+            // to block CEF-initiated quits — we must signal that this quit
+            // is user-initiated.
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit Watchtower") {
+                    WatchtowerRequestQuit()
+                    NSApp.terminate(nil)
+                }
+                .keyboardShortcut("q")
+            }
+
             CommandGroup(after: .newItem) {
                 // Context-aware: duplicates the type of the currently focused pane
                 Button("New Pane") {
@@ -161,6 +174,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Start the IPC server for CLI communication.
         IPCServer.shared.start()
 
+        // Observe terminate: calls that weren't explicitly flagged by our
+        // Cmd-Q / menu handler.  This covers the Dock "Quit" menu item,
+        // which calls [NSApp terminate:nil] directly.  CefApplication.m
+        // posts this notification instead of calling through when the flag
+        // is not set.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleTerminateAttempted(_:)),
+            name: Notification.Name("WatchtowerTerminateAttempted"),
+            object: nil
+        )
+
         // Set dark appearance at the app level so all windows (including
         // the titlebar chrome, traffic lights, and title text) render
         // correctly against the dark terminal background.
@@ -279,6 +304,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         IPCServer.shared.stop()
+        // Cleanly shut down CEF (invalidate pump timer, call cef_shutdown).
+        ChromiumManager.shared.shutdown()
+    }
+
+    /// Called via notification when CefApplication.m's swizzled terminate:
+    /// receives a call without the WatchtowerRequestQuit flag.  This covers
+    /// Dock "Quit" and any other system-initiated terminate: that bypasses
+    /// our SwiftUI Cmd-Q handler.  We set the flag and re-call terminate:
+    /// so the swizzled method lets it through.
+    @objc func handleTerminateAttempted(_ notification: Notification) {
+        WatchtowerRequestQuit()
+        NSApp.terminate(nil)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

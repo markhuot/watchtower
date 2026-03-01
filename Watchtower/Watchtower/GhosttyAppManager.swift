@@ -309,6 +309,7 @@ class GhosttyAppManager: ObservableObject {
 
         case GHOSTTY_ACTION_QUIT:
             DispatchQueue.main.async {
+                WatchtowerRequestQuit()
                 NSApp.terminate(nil)
             }
             return true
