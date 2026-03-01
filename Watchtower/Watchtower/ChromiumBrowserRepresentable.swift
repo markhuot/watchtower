@@ -68,9 +68,19 @@ struct ChromiumBrowserRepresentable: NSViewRepresentable {
                 // view removal. Nothing to do here.
                 NSLog("[CEF] dismantleNSView: isClosingCEF=true, skipping force-close (already in progress)")
             } else {
-                // Unexpected teardown (e.g. window closed externally). Force-close
-                // so CEF can clean up.
-                NSLog("[CEF] dismantleNSView: unexpected teardown, calling close_browser(force=1)")
+                // Check if this is an engine switch (model's engine changed away
+                // from .chromium). If so, detach the model from the CEF context
+                // so the close callbacks (do_close, on_before_close) don't try
+                // to remove the pane from the array — the pane is staying, just
+                // switching its rendering engine.
+                if let currentEngine = nsView.browser?.engine, currentEngine != .chromium {
+                    NSLog("[CEF] dismantleNSView: engine switch detected (now %@), detaching model from CEF context", currentEngine.rawValue)
+                    coordinator.clientContext?.browserModel = nil
+                    coordinator.clientContext?.browserView = nil
+                }
+
+                // Force-close so CEF can clean up.
+                NSLog("[CEF] dismantleNSView: calling close_browser(force=1)")
                 nsView.closeCEFBrowserForce()
             }
         } else {

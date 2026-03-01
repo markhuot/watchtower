@@ -45,6 +45,10 @@ enum BrowserConfiguration {
     static func makeConfiguration() -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
         config.processPool = processPool
+        // Enable "Inspect Element" in the WKWebView context menu.
+        // isInspectable (set on the view) allows Safari's Develop menu to
+        // connect, but the context menu item requires developerExtrasEnabled.
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         let contentController = WKUserContentController()
         contentController.addUserScript(formScript)
         config.userContentController = contentController
