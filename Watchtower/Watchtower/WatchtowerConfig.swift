@@ -30,6 +30,24 @@ class WatchtowerConfig: ObservableObject {
         }
     }
 
+    /// The search engine used for "Search the web" in the command palette.
+    @Published var searchEngine: SearchEngine = .duckduckgo {
+        didSet {
+            if oldValue != searchEngine {
+                save()
+            }
+        }
+    }
+
+    /// Custom search URL template. Use `%s` as a placeholder for the query.
+    @Published var customSearchURL: String = "" {
+        didSet {
+            if oldValue != customSearchURL {
+                save()
+            }
+        }
+    }
+
     /// Whether the user has dismissed the CLI install prompt permanently.
     @Published var cliInstallDismissed: Bool = false {
         didSet {
@@ -73,6 +91,15 @@ class WatchtowerConfig: ObservableObject {
                 chromiumRemoteDebuggingPort = port
             }
 
+            if let engineStr = json["search-engine"] as? String,
+               let engine = SearchEngine(rawValue: engineStr) {
+                searchEngine = engine
+            }
+
+            if let customURL = json["custom-search-url"] as? String {
+                customSearchURL = customURL
+            }
+
             if let dismissed = json["cli-install-dismissed"] as? Bool {
                 cliInstallDismissed = dismissed
             }
@@ -98,6 +125,10 @@ class WatchtowerConfig: ObservableObject {
             var json: [String: Any] = [:]
             json["browser-engine"] = browserEngine.rawValue
             json["chromium-remote-debugging-port"] = chromiumRemoteDebuggingPort
+            json["search-engine"] = searchEngine.rawValue
+            if !customSearchURL.isEmpty {
+                json["custom-search-url"] = customSearchURL
+            }
             if cliInstallDismissed {
                 json["cli-install-dismissed"] = cliInstallDismissed
             }
@@ -111,6 +142,37 @@ class WatchtowerConfig: ObservableObject {
             logger.info("Saved config to \(self.configFilePath.path, privacy: .public)")
         } catch {
             logger.error("Failed to write config file: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Build a full search URL for the given query using the current search engine config.
+    func searchURL(for query: String) -> URL? {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        switch searchEngine {
+        case .duckduckgo:
+            return URL(string: "https://duckduckgo.com/?q=\(encoded)")
+        case .google:
+            return URL(string: "https://www.google.com/search?q=\(encoded)")
+        case .custom:
+            guard !customSearchURL.isEmpty else { return nil }
+            let urlString = customSearchURL.contains("%s")
+                ? customSearchURL.replacingOccurrences(of: "%s", with: encoded)
+                : "\(customSearchURL)\(encoded)"
+            return URL(string: urlString)
+        }
+    }
+}
+
+enum SearchEngine: String, CaseIterable {
+    case duckduckgo
+    case google
+    case custom
+
+    var displayName: String {
+        switch self {
+        case .duckduckgo: return "DuckDuckGo"
+        case .google: return "Google"
+        case .custom: return "Custom"
         }
     }
 }

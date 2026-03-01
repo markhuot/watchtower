@@ -248,8 +248,7 @@ struct CommandPaletteView: View {
             vm.focusPane(terminal)
         })
         items.append(.builtIn(name: "New Browser", shortcut: "\u{2318}\u{21E7}B") { vm in
-            let browser = vm.addBrowser()
-            vm.focusPane(browser)
+            vm.openNewBrowser()
         })
         items.append(.builtIn(name: "Close Pane", shortcut: "\u{2318}W") { vm in
             vm.closeCurrentPane()
@@ -533,8 +532,7 @@ struct CommandPaletteView: View {
                     let searchWeb = CommandPaletteItem.queryAction(
                         name: "Search the web"
                     ) { vm, forceNewPane in
-                        let encoded = queryText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? queryText
-                        guard let url = URL(string: "https://duckduckgo.com/?q=\(encoded)") else { return }
+                        guard let url = WatchtowerConfig.shared.searchURL(for: queryText) else { return }
                         if !forceNewPane, let browser = vm.contextualPane as? BrowserPaneModel {
                             browser.navigate(to: url)
                         } else {

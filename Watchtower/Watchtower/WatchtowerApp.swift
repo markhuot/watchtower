@@ -44,8 +44,7 @@ struct WatchtowerApp: App {
 
                 Button("New Browser") {
                     if let vm = activeViewModel {
-                        let browser = vm.addBrowser()
-                        vm.focusPane(browser)
+                        vm.openNewBrowser()
                     }
                 }
                 .keyboardShortcut("b", modifiers: [.command, .shift])

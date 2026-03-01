@@ -40,34 +40,52 @@ struct ContentView: View {
     private static var hasShownCLIPrompt = false
 
     var body: some View {
-        GeometryReader { geometry in
-            ScrollViewReader { scrollProxy in
-                ScrollView(.horizontal, showsIndicators: !viewModel.isFocusMode) {
-                    HStack(spacing: 0) {
-                        ForEach(viewModel.panes) { pane in
-                            FocusModeWrapper(
-                                pane: pane,
-                                viewModel: viewModel
-                            ) {
-                                PaneWithHandle(
-                                    pane: pane,
-                                    allPanes: viewModel.panes,
-                                    viewModel: viewModel,
-                                    windowWidth: geometry.size.width
-                                )
-                            }
-                            .id(pane.id)
-                        }
+        Group {
+            if viewModel.panes.isEmpty {
+                EmptyStateView(
+                    onNewTerminal: {
+                        let terminal = viewModel.addTerminal()
+                        viewModel.focusPane(terminal)
+                    },
+                    onNewBrowser: {
+                        viewModel.openNewBrowser()
                     }
-                    .padding(10)
-                    .frame(minWidth: viewModel.isFullScreen ? geometry.size.width : nil)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Scroll to the focused pane when entering focus mode
-                .onChange(of: viewModel.isFocusMode) { isFocused in
-                    if isFocused, let targetId = viewModel.focusModePaneId {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            scrollProxy.scrollTo(targetId, anchor: .center)
+                )
+            } else {
+                GeometryReader { geometry in
+                    ScrollViewReader { scrollProxy in
+                        ScrollView(.horizontal, showsIndicators: !viewModel.isFocusMode) {
+                            HStack(spacing: 0) {
+                                ForEach(viewModel.panes) { pane in
+                                    FocusModeWrapper(
+                                        pane: pane,
+                                        viewModel: viewModel
+                                    ) {
+                                        PaneWithHandle(
+                                            pane: pane,
+                                            allPanes: viewModel.panes,
+                                            viewModel: viewModel,
+                                            windowWidth: geometry.size.width
+                                        )
+                                    }
+                                    .compositingGroup()
+                                    .opacity(pane.isClosing ? 0 : 1)
+                                    .offset(y: pane.isClosing ? 20 : 0)
+                                    .animation(.easeIn(duration: 0.25), value: pane.isClosing)
+                                    .id(pane.id)
+                                }
+                            }
+                            .padding(10)
+                            .frame(minWidth: viewModel.isFullScreen ? geometry.size.width : nil)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // Scroll to the focused pane when entering focus mode
+                        .onChange(of: viewModel.isFocusMode) { isFocused in
+                            if isFocused, let targetId = viewModel.focusModePaneId {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    scrollProxy.scrollTo(targetId, anchor: .center)
+                                }
+                            }
                         }
                     }
                 }
@@ -118,8 +136,7 @@ struct ContentView: View {
                     }
 
                     Button("New Browser") {
-                        let browser = viewModel.addBrowser()
-                        viewModel.focusPane(browser)
+                        viewModel.openNewBrowser()
                     }
 
                     Divider()
@@ -178,6 +195,88 @@ struct ContentView: View {
     }
 }
 
+// MARK: - EmptyStateView
+
+/// Shown when no panes are open. Presents two centered buttons for creating
+/// a new terminal or browser, each with an icon, title, and dimmed keyboard
+/// shortcut hint.
+struct EmptyStateView: View {
+    var onNewTerminal: () -> Void
+    var onNewBrowser: () -> Void
+
+    var body: some View {
+        HStack(spacing: 20) {
+            EmptyStateButton(
+                icon: "terminal",
+                title: "New Terminal",
+                shortcut: "\u{21E7}\u{2318}T",
+                action: onNewTerminal
+            )
+            EmptyStateButton(
+                icon: "globe",
+                title: "New Browser",
+                shortcut: "\u{21E7}\u{2318}B",
+                action: onNewBrowser
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct EmptyStateButton: View {
+    let icon: String
+    let title: String
+    let shortcut: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 24))
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                Text(shortcut)
+                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            .frame(width: 170, height: 140)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isHovering ? Color.white.opacity(0.08) : Color.white.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(isFocused ? Color.accentColor : Color.white.opacity(0.12), lineWidth: isFocused ? 2 : 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(.white)
+        .focused($isFocused)
+        .modifier(FocusEffectDisabledModifier())
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+}
+
+/// Conditionally applies `.focusEffectDisabled()` on macOS 14+.
+struct FocusEffectDisabledModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content.focusEffectDisabled()
+        } else {
+            content
+        }
+    }
+}
+
+// MARK: - FocusModeWrapper
+
 /// Wraps a pane with focus-mode visual treatment (dimming, shadow)
 /// without bloating the main ContentView body.
 struct FocusModeWrapper<Content: View>: View {
@@ -206,6 +305,10 @@ struct FocusModeWrapper<Content: View>: View {
                 radius: isFocusModeTarget ? 24 : 0,
                 x: 0, y: 0
             )
+            .compositingGroup()
+            .opacity(pane.isClosing ? 0 : 1)
+            .offset(y: pane.isClosing ? 20 : 0)
+            .animation(.easeIn(duration: pane.closeAnimationDuration), value: pane.isClosing)
     }
 
     @ViewBuilder
@@ -694,9 +797,7 @@ class PaneContainerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Start with one terminal
-        let initial = addTerminal()
-        focusPane(initial)
+        // App starts empty — the EmptyStateView offers buttons to create panes.
 
         // Install a local event monitor that watches scroll wheel events.
         // When the mouse is over a WKWebView (browser pane), WKWebView
@@ -912,57 +1013,52 @@ class PaneContainerViewModel: ObservableObject {
     }
 
     /// Close the currently focused pane.
-    /// If multiple panes exist, closes just the focused one (with confirmation
-    /// if an active session is running). If it's the only pane, closes the window.
+    /// If an active session is running, shows a confirmation alert first.
+    /// When the last pane is closed, the empty state is shown.
     func closeCurrentPane() {
         guard let focusedPane = contextualPane else { return }
         guard let window = NSApp.keyWindow,
               let contentView = window.contentView else { return }
 
-        if panes.count > 1 {
-            if let terminal = focusedPane as? TerminalPaneModel {
-                // Terminal pane — check for active session
-                let terminalViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
-                if let targetView = terminalViews.first(where: { $0.terminal.id == terminal.id }),
-                   let surface = targetView.surface,
-                   ghostty_surface_needs_confirm_quit(surface) {
-                    let alert = NSAlert()
-                    alert.messageText = "Close Terminal?"
-                    alert.informativeText = "This terminal has an active session. Closing it will terminate the session."
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "Close")
-                    alert.addButton(withTitle: "Cancel")
-                    alert.beginSheetModal(for: window) { [weak self] response in
-                        if response == .alertFirstButtonReturn {
-                            self?.removePane(byId: focusedPane.id)
-                        }
+        if let terminal = focusedPane as? TerminalPaneModel {
+            // Terminal pane — check for active session
+            let terminalViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
+            if let targetView = terminalViews.first(where: { $0.terminal.id == terminal.id }),
+               let surface = targetView.surface,
+               ghostty_surface_needs_confirm_quit(surface) {
+                let alert = NSAlert()
+                alert.messageText = "Close Terminal?"
+                alert.informativeText = "This terminal has an active session. Closing it will terminate the session."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Close")
+                alert.addButton(withTitle: "Cancel")
+                alert.beginSheetModal(for: window) { [weak self] response in
+                    if response == .alertFirstButtonReturn {
+                        self?.removePane(byId: focusedPane.id)
                     }
-                } else {
-                    removePane(byId: focusedPane.id)
                 }
-            } else if let browser = focusedPane as? BrowserPaneModel {
-                // Browser pane — check for form interaction
-                if browser.hasInteractedForms {
-                    let alert = NSAlert()
-                    alert.messageText = "Close Browser Pane?"
-                    alert.informativeText = "There are unsaved changes on this page that will be lost."
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "Close")
-                    alert.addButton(withTitle: "Cancel")
-                    alert.beginSheetModal(for: window) { [weak self] response in
-                        if response == .alertFirstButtonReturn {
-                            self?.removePane(byId: focusedPane.id)
-                        }
+            } else {
+                removePane(byId: focusedPane.id)
+            }
+        } else if let browser = focusedPane as? BrowserPaneModel {
+            // Browser pane — check for form interaction
+            if browser.hasInteractedForms {
+                let alert = NSAlert()
+                alert.messageText = "Close Browser Pane?"
+                alert.informativeText = "There are unsaved changes on this page that will be lost."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Close")
+                alert.addButton(withTitle: "Cancel")
+                alert.beginSheetModal(for: window) { [weak self] response in
+                    if response == .alertFirstButtonReturn {
+                        self?.removePane(byId: focusedPane.id)
                     }
-                } else {
-                    removePane(byId: focusedPane.id)
                 }
             } else {
                 removePane(byId: focusedPane.id)
             }
         } else {
-            // Single pane — close the window.
-            window.performClose(nil)
+            removePane(byId: focusedPane.id)
         }
     }
 
@@ -981,7 +1077,22 @@ class PaneContainerViewModel: ObservableObject {
             exitFocusMode()
         }
 
-        // Initiate CEF close for any Chromium browser panes first.
+        // Determine animation duration (hold Shift for slow-motion)
+        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
+
+        // Start close animation on all right panes
+        withAnimation(.easeIn(duration: duration)) {
+            for pane in rightPanes {
+                pane.closeAnimationDuration = duration
+                pane.isClosing = true
+            }
+        }
+
+        // Ensure the current pane is focused
+        focusPane(focusedPane)
+
+        // Initiate CEF close for any Chromium browser panes.
         // They will be removed asynchronously when on_before_close fires.
         var chromiumPaneIds = Set<UUID>()
         for pane in rightPanes {
@@ -996,17 +1107,17 @@ class PaneContainerViewModel: ObservableObject {
             }
         }
 
-        // Remove non-Chromium panes immediately.
+        // Remove non-Chromium panes after the animation finishes.
         // Chromium panes stay until finishRemovingCEFPane is called.
-        let toRemoveNow = rightPanes.filter { !chromiumPaneIds.contains($0.id) }
-        for pane in toRemoveNow {
-            if let index = panes.firstIndex(where: { $0.id == pane.id }) {
-                panes.remove(at: index)
+        let nonChromiumIds = rightPanes.filter { !chromiumPaneIds.contains($0.id) }.map { $0.id }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            guard let self = self else { return }
+            for id in nonChromiumIds {
+                if let index = self.panes.firstIndex(where: { $0.id == id }) {
+                    self.panes.remove(at: index)
+                }
             }
         }
-
-        // Ensure the current pane is focused
-        focusPane(focusedPane)
     }
 
     /// Exit focus mode if it is currently active.
@@ -1092,13 +1203,25 @@ class PaneContainerViewModel: ObservableObject {
         return browser
     }
 
+    /// Create a new blank browser pane, focus it, and immediately open
+    /// the command palette so the user can type a URL right away.
+    @discardableResult
+    func openNewBrowser(engine: BrowserEngine? = nil) -> BrowserPaneModel {
+        let browser = addBrowser(engine: engine)
+        focusPane(browser)
+        commandPalettePaneId = browser.id
+        // Cancel the pending focus so the browser NSView doesn't steal
+        // first responder from the command palette's text field.
+        pendingFocus = nil
+        return browser
+    }
+
     /// Create a new pane matching the type of the currently focused pane.
     /// If a browser is focused a new browser is created; otherwise a new
     /// terminal is created. The new pane is automatically focused.
     func addContextualPane() {
         if contextualPane is BrowserPaneModel {
-            let browser = addBrowser()
-            focusPane(browser)
+            openNewBrowser()
         } else {
             let terminal = addTerminal()
             focusPane(terminal)
@@ -1139,6 +1262,14 @@ class PaneContainerViewModel: ObservableObject {
             return
         }
 
+        // Don't re-trigger if already closing
+        guard !panes[index].isClosing else { return }
+
+        // Determine animation duration (hold Shift for slow-motion)
+        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
+        panes[index].closeAnimationDuration = duration
+
         // For Chromium browser panes, we must let CEF finish its async close
         // sequence before removing the pane from the array. Removing the pane
         // immediately tears down the NSView hierarchy while the CrBrowserMain
@@ -1148,6 +1279,15 @@ class PaneContainerViewModel: ObservableObject {
            !browser.isClosingCEF {
             NSLog("[CEF-CLOSE] removePane: initiating two-phase close for Chromium pane %@", id.uuidString)
             browser.isClosingCEF = true
+            // Start close animation alongside CEF shutdown
+            withAnimation(.easeIn(duration: duration)) {
+                panes[index].isClosing = true
+            }
+            // Focus neighbor immediately so the user isn't left on the dying pane
+            if panes.count > 1 {
+                let focusIndex = index > 0 ? index - 1 : 1
+                focusPaneById(panes[focusIndex].id)
+            }
             // Initiate CEF's close sequence. The pane stays in the array
             // (and the view stays in the hierarchy) until on_before_close
             // fires and posts .cefBrowserDidClose, which calls
@@ -1162,19 +1302,23 @@ class PaneContainerViewModel: ObservableObject {
 
         NSLog("[CEF-CLOSE] removePane: removing non-Chromium pane %@ at index %d", id.uuidString, index)
 
-        // Determine which pane to focus after removal.
-        let neighborId: UUID
-        if panes.count > 1 {
-            let focusIndex = index > 0 ? index - 1 : 1
-            neighborId = panes[focusIndex].id
-        } else {
-            // Last pane — create a new one and use its ID.
-            let newTerminal = addTerminal()
-            neighborId = newTerminal.id
+        // Start close animation, then remove after it completes
+        withAnimation(.easeIn(duration: duration)) {
+            panes[index].isClosing = true
         }
 
-        panes.remove(at: index)
-        focusPaneById(neighborId)
+        // Focus neighbor immediately so the user isn't left on the dying pane
+        if panes.count > 1 {
+            let focusIndex = index > 0 ? index - 1 : 1
+            focusPaneById(panes[focusIndex].id)
+        }
+
+        // Remove the pane from the array after the animation finishes
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            guard let self = self else { return }
+            guard let removeIndex = self.panes.firstIndex(where: { $0.id == id }) else { return }
+            self.panes.remove(at: removeIndex)
+        }
     }
 
     /// Called when CEF's `on_before_close` fires, signaling the browser is
@@ -1195,19 +1339,21 @@ class PaneContainerViewModel: ObservableObject {
             exitFocusMode()
         }
 
-        // Determine which pane to focus after removal.
-        let neighborId: UUID
+        // The close animation was already started in removePane(byId:).
+        // If CEF closed faster than 250ms the animation may still be in
+        // flight — that's fine, removing the view mid-animation is smooth.
+
+        // Focus neighbor and remove from array
         if panes.count > 1 {
             let focusIndex = index > 0 ? index - 1 : 1
-            neighborId = panes[focusIndex].id
+            let neighborId = panes[focusIndex].id
+            NSLog("[CEF-CLOSE] finishRemovingCEFPane: removing pane at index %d, focusing %@", index, neighborId.uuidString)
+            panes.remove(at: index)
+            focusPaneById(neighborId)
         } else {
-            let newTerminal = addTerminal()
-            neighborId = newTerminal.id
+            NSLog("[CEF-CLOSE] finishRemovingCEFPane: removing last pane at index %d", index)
+            panes.remove(at: index)
         }
-
-        NSLog("[CEF-CLOSE] finishRemovingCEFPane: removing pane at index %d, focusing %@", index, neighborId.uuidString)
-        panes.remove(at: index)
-        focusPaneById(neighborId)
         NSLog("[CEF-CLOSE] finishRemovingCEFPane: done, panes.count=%d", panes.count)
     }
 

@@ -22,6 +22,25 @@ struct SettingsView: View {
 
                 Divider()
 
+                Picker("Search Engine", selection: $config.searchEngine) {
+                    ForEach(SearchEngine.allCases, id: \.self) { engine in
+                        Text(engine.displayName).tag(engine)
+                    }
+                }
+                .pickerStyle(.menu)
+                Text("The search engine used by \"Search the web\" in the command palette.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if config.searchEngine == .custom {
+                    TextField("Search URL (use %s for query)", text: $config.customSearchURL)
+                        .textFieldStyle(.roundedBorder)
+                    Text("Example: https://search.example.com/?q=%s")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+
+                Divider()
+
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Command Line Interface")
@@ -65,7 +84,7 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .tabItem { Label("General", systemImage: "gear") }
         }
-        .frame(width: 450, height: 280)
+        .frame(width: 450, height: 400)
         .onAppear {
             checkCLIStatus()
         }

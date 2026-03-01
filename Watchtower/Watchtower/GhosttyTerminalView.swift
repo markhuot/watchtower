@@ -352,46 +352,37 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         return result
     }
 
-    /// Intercept the "Close" menu item (Cmd+W). When multiple panes exist
-    /// (including browser panes), close just this pane via a notification.
-    /// When this is the only pane, fall through to the default window close.
+    /// Intercept the "Close" menu item (Cmd+W). Close just this terminal pane,
+    /// with a confirmation dialog if an active session is running.
+    /// When this is the last pane, the empty state is shown instead of closing the window.
     @objc func performClose(_ sender: Any?) {
         guard let window = self.window else {
             window?.performClose(sender)
             return
         }
 
-        // Count all panes (terminals + browsers) via the view model.
-        let totalPanes = terminal.viewModel?.panes.count ?? 0
+        if let surface = surface, ghostty_surface_needs_confirm_quit(surface) {
+            let alert = NSAlert()
+            alert.messageText = "Close Terminal?"
+            alert.informativeText = "This terminal has an active session. Closing it will terminate the session."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Close")
+            alert.addButton(withTitle: "Cancel")
 
-        if totalPanes > 1 {
-            // Multiple panes — close just this one.
-            if let surface = surface, ghostty_surface_needs_confirm_quit(surface) {
-                let alert = NSAlert()
-                alert.messageText = "Close Terminal?"
-                alert.informativeText = "This terminal has an active session. Closing it will terminate the session."
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "Close")
-                alert.addButton(withTitle: "Cancel")
-
-                alert.beginSheetModal(for: window) { [weak self] response in
-                    guard let self = self else { return }
-                    if response == .alertFirstButtonReturn {
-                        NotificationCenter.default.post(
-                            name: .ghosttySurfaceClosed,
-                            object: self
-                        )
-                    }
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard let self = self else { return }
+                if response == .alertFirstButtonReturn {
+                    NotificationCenter.default.post(
+                        name: .ghosttySurfaceClosed,
+                        object: self
+                    )
                 }
-            } else {
-                NotificationCenter.default.post(
-                    name: .ghosttySurfaceClosed,
-                    object: self
-                )
             }
         } else {
-            // Single pane — let the window close normally.
-            window.performClose(sender)
+            NotificationCenter.default.post(
+                name: .ghosttySurfaceClosed,
+                object: self
+            )
         }
     }
 

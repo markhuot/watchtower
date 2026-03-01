@@ -220,39 +220,29 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
             return
         }
 
-        // Count all panes (terminals + browsers) via the view model.
-        let totalPanes = browser.viewModel?.panes.count ?? 0
-
-        if totalPanes > 1 {
-            // Multiple panes — close just this one.
-            if browser.hasInteractedForms {
-                guard let window = self.window else { return }
-                let alert = NSAlert()
-                alert.messageText = "Close Browser Pane?"
-                alert.informativeText = "There are unsaved changes on this page that will be lost."
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "Close")
-                alert.addButton(withTitle: "Cancel")
-                alert.beginSheetModal(for: window) { response in
-                    if response == .alertFirstButtonReturn {
-                        NotificationCenter.default.post(
-                            name: .browserPaneClosed,
-                            object: nil,
-                            userInfo: ["paneId": browser.id]
-                        )
-                    }
+        if browser.hasInteractedForms {
+            guard let window = self.window else { return }
+            let alert = NSAlert()
+            alert.messageText = "Close Browser Pane?"
+            alert.informativeText = "There are unsaved changes on this page that will be lost."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Close")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn {
+                    NotificationCenter.default.post(
+                        name: .browserPaneClosed,
+                        object: nil,
+                        userInfo: ["paneId": browser.id]
+                    )
                 }
-            } else {
-                NotificationCenter.default.post(
-                    name: .browserPaneClosed,
-                    object: nil,
-                    userInfo: ["paneId": browser.id]
-                )
             }
         } else {
-            // Single pane — let the window close normally.
-            guard let window = self.window else { return }
-            window.performClose(sender)
+            NotificationCenter.default.post(
+                name: .browserPaneClosed,
+                object: nil,
+                userInfo: ["paneId": browser.id]
+            )
         }
     }
 

@@ -370,8 +370,13 @@ final class IPCServer {
             }
         }
 
-        let browser = viewModel.addBrowser(url: url, engine: engine)
-        viewModel.focusPane(browser)
+        let browser: BrowserPaneModel
+        if url.absoluteString == "about:blank" {
+            browser = viewModel.openNewBrowser(engine: engine)
+        } else {
+            browser = viewModel.addBrowser(url: url, engine: engine)
+            viewModel.focusPane(browser)
+        }
 
         var response: [String: Any] = ["ok": true, "paneId": browser.id.uuidString]
         if let warning = warning {
