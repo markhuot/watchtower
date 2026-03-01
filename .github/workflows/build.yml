@@ -94,6 +94,15 @@ jobs:
           # Add to search list
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
 
+      - name: Build CLI
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          export BUN_INSTALL="$HOME/.bun"
+          export PATH="$BUN_INSTALL/bin:$PATH"
+          cd cli
+          bun install
+          bun build --compile src/index.ts --outfile watchtower
+
       - name: Build Watchtower
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
