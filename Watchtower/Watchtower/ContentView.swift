@@ -33,7 +33,11 @@ class PendingFocus {
 struct ContentView: View {
     @StateObject private var viewModel = PaneContainerViewModel()
     @ObservedObject private var appManager = GhosttyAppManager.shared
+    @State private var showCLIInstallSheet = false
 
+    /// Ensures the CLI install prompt only shows once per app launch,
+    /// even if multiple windows are opened.
+    private static var hasShownCLIPrompt = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -73,6 +77,12 @@ struct ContentView: View {
         .focusedSceneValue(\.paneViewModel, viewModel)
         .onAppear {
             IPCServer.shared.register(viewModel)
+
+            // Show CLI install prompt on first window only
+            if !ContentView.hasShownCLIPrompt && CLIInstaller.shouldPrompt {
+                ContentView.hasShownCLIPrompt = true
+                showCLIInstallSheet = true
+            }
         }
         .onDisappear {
             IPCServer.shared.unregister(viewModel)
@@ -146,6 +156,9 @@ struct ContentView: View {
                     }
                 )
             }
+        }
+        .sheet(isPresented: $showCLIInstallSheet) {
+            CLIInstallSheet(isPresented: $showCLIInstallSheet)
         }
     }
 

@@ -189,4 +189,4 @@ bun build --compile src/index.ts --outfile watchtower  # compile to standalone b
 
 ### Xcode Project ID Scheme
 
-Sequential human-readable IDs with prefix `AA`. Next available suffix: `0030`. Used suffixes: `002F` (IPCServer.swift build file and file reference).
+Sequential human-readable IDs with prefix `AA`. Next available suffix: `0034`. Used suffixes: `0031` (CLIInstaller.swift), `0032` (CLIInstallSheet.swift), `0033` (watchtower CLI binary resource).

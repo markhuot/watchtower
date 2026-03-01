@@ -30,6 +30,15 @@ class WatchtowerConfig: ObservableObject {
         }
     }
 
+    /// Whether the user has dismissed the CLI install prompt permanently.
+    @Published var cliInstallDismissed: Bool = false {
+        didSet {
+            if oldValue != cliInstallDismissed {
+                save()
+            }
+        }
+    }
+
     /// The path to the config file.
     private let configFilePath: URL
 
@@ -64,6 +73,10 @@ class WatchtowerConfig: ObservableObject {
                 chromiumRemoteDebuggingPort = port
             }
 
+            if let dismissed = json["cli-install-dismissed"] as? Bool {
+                cliInstallDismissed = dismissed
+            }
+
             logger.info("Loaded config: browser-engine=\(self.browserEngine.rawValue, privacy: .public), chromium-remote-debugging-port=\(self.chromiumRemoteDebuggingPort)")
         } catch {
             logger.error("Failed to read config file: \(error.localizedDescription, privacy: .public)")
@@ -85,6 +98,9 @@ class WatchtowerConfig: ObservableObject {
             var json: [String: Any] = [:]
             json["browser-engine"] = browserEngine.rawValue
             json["chromium-remote-debugging-port"] = chromiumRemoteDebuggingPort
+            if cliInstallDismissed {
+                json["cli-install-dismissed"] = cliInstallDismissed
+            }
 
             let data = try JSONSerialization.data(
                 withJSONObject: json,

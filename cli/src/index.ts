@@ -21,6 +21,7 @@ import { clearHistory } from "./commands/clear-history.ts";
 import { fullscreen } from "./commands/fullscreen.ts";
 import { minimize } from "./commands/minimize.ts";
 import { zoom } from "./commands/zoom.ts";
+import { setColor } from "./commands/set-color.ts";
 
 const args = process.argv.slice(2);
 
@@ -53,6 +54,7 @@ Commands:
   fullscreen      Toggle full screen
   minimize        Minimize the window
   zoom            Zoom the window
+  set color       Set the pane header color (hex or --reset)
 
 Options:
   --help, -h      Show this help message
@@ -98,6 +100,7 @@ const twoWordCommands: Record<string, (args: string[]) => Promise<void>> = {
   "move left": moveLeft,
   "move right": moveRight,
   "switch engine": switchEngine,
+  "set color": setColor,
 };
 
 const firstArg = args[0];

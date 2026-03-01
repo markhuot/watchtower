@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import os
 
 /// Lightweight Unix domain socket server for CLI → Watchtower IPC.
@@ -312,6 +313,8 @@ final class IPCServer {
             return handleMinimize()
         case "zoom":
             return handleZoom()
+        case "set-pane-color":
+            return handleSetPaneColor(json, viewModel: viewModel)
         default:
             return ["ok": false, "error": "Unknown command: \(command)"]
         }
@@ -516,6 +519,31 @@ final class IPCServer {
 
     private func handleClearHistory() -> [String: Any] {
         HistoryStore.shared.clearAll()
+        return ["ok": true]
+    }
+
+    // MARK: - Pane Color
+
+    private func handleSetPaneColor(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
+        guard let paneIdStr = json["paneId"] as? String,
+              let paneId = UUID(uuidString: paneIdStr) else {
+            return ["ok": false, "error": "Missing or invalid 'paneId' field"]
+        }
+
+        guard let pane = viewModel.panes.first(where: { $0.id == paneId }) else {
+            return ["ok": false, "error": "Pane not found: \(paneIdStr)"]
+        }
+
+        // null or missing color means reset to default
+        if let colorHex = json["color"] as? String {
+            guard let color = parseHexColor(colorHex) else {
+                return ["ok": false, "error": "Invalid hex color: \(colorHex)"]
+            }
+            pane.headerColor = color
+        } else {
+            pane.headerColor = nil
+        }
+
         return ["ok": true]
     }
 
