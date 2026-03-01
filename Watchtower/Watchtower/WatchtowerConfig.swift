@@ -21,8 +21,19 @@ class WatchtowerConfig: ObservableObject {
         }
     }
 
-    /// The remote debugging port for CEF. 0 = disabled.
-    @Published var chromiumRemoteDebuggingPort: Int = 0 {
+    /// Whether Chrome Debugging Protocol (CDP) is enabled for CEF browsers.
+    /// When true, CEF starts with remote debugging on `chromiumRemoteDebuggingPort`.
+    @Published var enableChromeDebugging: Bool = false {
+        didSet {
+            if oldValue != enableChromeDebugging {
+                save()
+            }
+        }
+    }
+
+    /// The remote debugging port for CEF. Only used when `enableChromeDebugging` is true.
+    /// Default 9222 (standard Chrome DevTools Protocol port).
+    @Published var chromiumRemoteDebuggingPort: Int = 9222 {
         didSet {
             if oldValue != chromiumRemoteDebuggingPort {
                 save()
@@ -87,6 +98,10 @@ class WatchtowerConfig: ObservableObject {
                 browserEngine = engine
             }
 
+            if let enabled = json["enable-chrome-debugging"] as? Bool {
+                enableChromeDebugging = enabled
+            }
+
             if let port = json["chromium-remote-debugging-port"] as? Int {
                 chromiumRemoteDebuggingPort = port
             }
@@ -124,6 +139,7 @@ class WatchtowerConfig: ObservableObject {
 
             var json: [String: Any] = [:]
             json["browser-engine"] = browserEngine.rawValue
+            json["enable-chrome-debugging"] = enableChromeDebugging
             json["chromium-remote-debugging-port"] = chromiumRemoteDebuggingPort
             json["search-engine"] = searchEngine.rawValue
             if !customSearchURL.isEmpty {

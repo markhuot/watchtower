@@ -355,21 +355,6 @@ final class IPCServer {
             engine = nil
         }
 
-        // Handle remote debugging port — must be set before CEF initializes
-        var warning: String? = nil
-        if let port = json["remoteDebuggingPort"] as? Int, port > 0 {
-            if ChromiumManager.shared.isInitialized {
-                let currentPort = ChromiumManager.shared.initializedRemoteDebuggingPort
-                if currentPort != port {
-                    warning = "CEF is already initialized with remote debugging port \(currentPort). Cannot change to \(port). Using existing port."
-                }
-                // If same port, no warning needed — it's already active
-            } else {
-                // CEF not yet initialized — set the port so it picks it up on init
-                WatchtowerConfig.shared.chromiumRemoteDebuggingPort = port
-            }
-        }
-
         let browser: BrowserPaneModel
         if url.absoluteString == "about:blank" {
             browser = viewModel.openNewBrowser(engine: engine)
@@ -378,10 +363,7 @@ final class IPCServer {
             viewModel.focusPane(browser)
         }
 
-        var response: [String: Any] = ["ok": true, "paneId": browser.id.uuidString]
-        if let warning = warning {
-            response["warning"] = warning
-        }
+        let response: [String: Any] = ["ok": true, "paneId": browser.id.uuidString]
         return response
     }
 

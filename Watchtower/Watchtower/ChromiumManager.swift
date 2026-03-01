@@ -118,8 +118,12 @@ class ChromiumManager {
         let helperPath = Bundle.main.bundlePath + "/Contents/Frameworks/Watchtower Helper.app/Contents/MacOS/Watchtower Helper"
         cefStringSet(helperPath, cefStr: &settings.browser_subprocess_path)
 
-        settings.remote_debugging_port = Int32(WatchtowerConfig.shared.chromiumRemoteDebuggingPort)
-        initializedRemoteDebuggingPort = WatchtowerConfig.shared.chromiumRemoteDebuggingPort
+        // Remote debugging port — only enabled when the user has toggled it on in Settings
+        let effectivePort = WatchtowerConfig.shared.enableChromeDebugging
+            ? WatchtowerConfig.shared.chromiumRemoteDebuggingPort
+            : 0
+        settings.remote_debugging_port = Int32(effectivePort)
+        initializedRemoteDebuggingPort = effectivePort
         settings.log_severity = LOGSEVERITY_VERBOSE
 
         // Verify CefApplication.m's +load swizzle installed isHandlingSendEvent on NSApp.

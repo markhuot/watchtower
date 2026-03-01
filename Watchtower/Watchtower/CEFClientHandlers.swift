@@ -22,6 +22,7 @@ class CEFClientContext {
     var displayHandler: UnsafeMutablePointer<cef_display_handler_t>?
     var downloadHandler: UnsafeMutablePointer<cef_download_handler_t>?
     var focusHandler: UnsafeMutablePointer<cef_focus_handler_t>?
+    var contextMenuHandler: UnsafeMutablePointer<cef_context_menu_handler_t>?
     var progressTimer: Timer?
 
     /// DevTools message observer for Runtime.bindingCalled (form interaction JS→native).
@@ -108,12 +109,16 @@ func cefMakeClient(context: CEFClientContext) -> UnsafeMutablePointer<cef_client
     let fh = cefMakeFocusHandler(context: context)
     context.focusHandler = fh
 
+    let cmh = cefMakeContextMenuHandler(context: context)
+    context.contextMenuHandler = cmh
+
     cefRegisterContext(context, forClient: client)
     cefRegisterHandler(UnsafeMutableRawPointer(lsh), context: context)
     cefRegisterHandler(UnsafeMutableRawPointer(lh), context: context)
     cefRegisterHandler(UnsafeMutableRawPointer(dh), context: context)
     cefRegisterHandler(UnsafeMutableRawPointer(dlh), context: context)
     cefRegisterHandler(UnsafeMutableRawPointer(fh), context: context)
+    cefRegisterHandler(UnsafeMutableRawPointer(cmh), context: context)
 
     client.pointee.get_life_span_handler = { (selfPtr) -> UnsafeMutablePointer<cef_life_span_handler_t>? in
         guard let selfPtr = selfPtr else { return nil }
@@ -151,6 +156,14 @@ func cefMakeClient(context: CEFClientContext) -> UnsafeMutablePointer<cef_client
         guard let selfPtr = selfPtr else { return nil }
         guard let ctx = contextRegistry[UnsafeMutableRawPointer(selfPtr)] else { return nil }
         guard let handler = ctx.focusHandler else { return nil }
+        handler.pointee.base.add_ref?(&handler.pointee.base)
+        return handler
+    }
+
+    client.pointee.get_context_menu_handler = { (selfPtr) -> UnsafeMutablePointer<cef_context_menu_handler_t>? in
+        guard let selfPtr = selfPtr else { return nil }
+        guard let ctx = contextRegistry[UnsafeMutableRawPointer(selfPtr)] else { return nil }
+        guard let handler = ctx.contextMenuHandler else { return nil }
         handler.pointee.base.add_ref?(&handler.pointee.base)
         return handler
     }
@@ -603,6 +616,53 @@ private func cefMakeFocusHandler(context: CEFClientContext) -> UnsafeMutablePoin
                 ctx.browserView?.scrollToVisibleInEnclosingScrollView()
             }
         }
+    }
+
+    return handler
+}
+
+// MARK: - Factory: cef_context_menu_handler_t
+
+/// Custom command ID for the "Inspect Element" menu item.
+private let kMenuIdInspectElement: Int32 = 26500  // MENU_ID_USER_FIRST
+
+private func cefMakeContextMenuHandler(context: CEFClientContext) -> UnsafeMutablePointer<cef_context_menu_handler_t> {
+    let handler: UnsafeMutablePointer<cef_context_menu_handler_t> = cefCreate()
+
+    // on_before_context_menu: append "Inspect Element" to the default menu
+    handler.pointee.on_before_context_menu = { (selfPtr, browser, frame, params, model) in
+        guard let model = model else { return }
+        model.pointee.add_separator?(model)
+        withCEFString("Inspect Element") { label in
+            model.pointee.add_item?(model, kMenuIdInspectElement, &label)
+        }
+    }
+
+    // on_context_menu_command: open DevTools when "Inspect Element" is selected
+    handler.pointee.on_context_menu_command = { (selfPtr, browser, frame, params, commandId, eventFlags) -> Int32 in
+        guard commandId == kMenuIdInspectElement else { return 0 }
+        guard let browser = browser else { return 0 }
+        guard let host = browser.pointee.get_host?(browser) else { return 0 }
+        defer { _ = host.pointee.base.release?(&host.pointee.base) }
+
+        // Get the click coordinates for element-level inspection
+        var point = cef_point_t(x: 0, y: 0)
+        if let params = params {
+            point.x = Int32(params.pointee.get_xcoord?(params) ?? 0)
+            point.y = Int32(params.pointee.get_ycoord?(params) ?? 0)
+        }
+
+        // Open DevTools in a new popup window
+        var windowInfo = cef_window_info_t()
+        memset(&windowInfo, 0, MemoryLayout<cef_window_info_t>.size)
+        windowInfo.size = MemoryLayout<cef_window_info_t>.size
+
+        var settings = cef_browser_settings_t()
+        memset(&settings, 0, MemoryLayout<cef_browser_settings_t>.size)
+        settings.size = MemoryLayout<cef_browser_settings_t>.size
+
+        host.pointee.show_dev_tools?(host, &windowInfo, nil, &settings, &point)
+        return 1
     }
 
     return handler
