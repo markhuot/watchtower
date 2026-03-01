@@ -39,10 +39,11 @@ class PaneModel: Identifiable, ObservableObject {
     @Published var isDragging: Bool = false
     @Published var isCollapsed: Bool = false
     @Published var isClosing: Bool = false
+    @Published var isAppearing: Bool = true
 
-    /// Duration of the close animation. Normally 0.25s, but 3s when
+    /// Duration of the close/appear animation. Normally 0.2s, but 3s when
     /// Shift is held (standard macOS slow-motion convention).
-    var closeAnimationDuration: TimeInterval = 0.2
+    var animationDuration: TimeInterval = 0.2
 
     /// Whether the bell/alert has been rung and not yet acknowledged.
     /// Set to `true` when the terminal rings the bell. Cleared after

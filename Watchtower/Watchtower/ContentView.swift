@@ -68,10 +68,6 @@ struct ContentView: View {
                                             windowWidth: geometry.size.width
                                         )
                                     }
-                                    .compositingGroup()
-                                    .opacity(pane.isClosing ? 0 : 1)
-                                    .offset(y: pane.isClosing ? 20 : 0)
-                                    .animation(.easeIn(duration: 0.25), value: pane.isClosing)
                                     .id(pane.id)
                                 }
                             }
@@ -306,9 +302,13 @@ struct FocusModeWrapper<Content: View>: View {
                 x: 0, y: 0
             )
             .compositingGroup()
-            .opacity(pane.isClosing ? 0 : 1)
-            .offset(y: pane.isClosing ? 20 : 0)
-            .animation(.easeIn(duration: pane.closeAnimationDuration), value: pane.isClosing)
+            .opacity(pane.isClosing ? 0 : (pane.isAppearing ? 0 : 1))
+            .offset(
+                x: pane.isAppearing ? 50 : 0,
+                y: pane.isClosing ? 20 : 0
+            )
+            .animation(.easeIn(duration: pane.animationDuration), value: pane.isClosing)
+            .animation(.easeOut(duration: pane.animationDuration), value: pane.isAppearing)
     }
 
     @ViewBuilder
@@ -1084,7 +1084,7 @@ class PaneContainerViewModel: ObservableObject {
         // Start close animation on all right panes
         withAnimation(.easeIn(duration: duration)) {
             for pane in rightPanes {
-                pane.closeAnimationDuration = duration
+                pane.animationDuration = duration
                 pane.isClosing = true
             }
         }
@@ -1163,6 +1163,10 @@ class PaneContainerViewModel: ObservableObject {
             ?? NSHomeDirectory()
         let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
 
+        // Determine animation duration (hold Shift for slow-motion)
+        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
+
         let terminal = TerminalPaneModel(
             id: UUID(),
             title: "Terminal \(panes.count + 1)",
@@ -1172,6 +1176,7 @@ class PaneContainerViewModel: ObservableObject {
             initialInput: initialInput
         )
         terminal.viewModel = self
+        terminal.animationDuration = duration
 
         // Insert after the contextual pane, or append at the end if none is focused
         if let source = sourcePane,
@@ -1179,6 +1184,13 @@ class PaneContainerViewModel: ObservableObject {
             panes.insert(terminal, at: sourceIndex + 1)
         } else {
             panes.append(terminal)
+        }
+
+        // Animate the pane in on the next run loop (after SwiftUI renders the initial frame)
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: duration)) {
+                terminal.isAppearing = false
+            }
         }
 
         return terminal
@@ -1189,8 +1201,13 @@ class PaneContainerViewModel: ObservableObject {
         let sourcePane = contextualPane
         let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
 
+        // Determine animation duration (hold Shift for slow-motion)
+        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
+
         let browser = BrowserPaneModel(url: url, paneWidth: paneWidth, engine: engine ?? WatchtowerConfig.shared.browserEngine)
         browser.viewModel = self
+        browser.animationDuration = duration
 
         // Insert after the contextual pane, or append at the end if none is focused
         if let source = sourcePane,
@@ -1198,6 +1215,13 @@ class PaneContainerViewModel: ObservableObject {
             panes.insert(browser, at: sourceIndex + 1)
         } else {
             panes.append(browser)
+        }
+
+        // Animate the pane in on the next run loop (after SwiftUI renders the initial frame)
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: duration)) {
+                browser.isAppearing = false
+            }
         }
 
         return browser
@@ -1268,7 +1292,7 @@ class PaneContainerViewModel: ObservableObject {
         // Determine animation duration (hold Shift for slow-motion)
         let shiftHeld = NSEvent.modifierFlags.contains(.shift)
         let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
-        panes[index].closeAnimationDuration = duration
+        panes[index].animationDuration = duration
 
         // For Chromium browser panes, we must let CEF finish its async close
         // sequence before removing the pane from the array. Removing the pane
