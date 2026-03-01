@@ -157,7 +157,12 @@ jobs:
               --timestamp --options runtime "$helper"
           done
 
-          # 4. Re-sign the whole app bundle (includes our own binary + resources)
+          # 4. Sign the bundled CLI binary
+          codesign --force --sign "Developer ID Application" \
+            --timestamp --options runtime \
+            "$APP/watchtower"
+
+          # 5. Re-sign the whole app bundle (includes our own binary + resources)
           codesign --force --sign "Developer ID Application" \
             --timestamp \
             --options runtime \
