@@ -1078,7 +1078,7 @@ class PaneContainerViewModel: ObservableObject {
         }
 
         // Determine animation duration (hold Shift for slow-motion)
-        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let shiftHeld = NSEvent.modifierFlags.contains(.option)
         let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
 
         // Start close animation on all right panes
@@ -1136,7 +1136,7 @@ class PaneContainerViewModel: ObservableObject {
         }
 
         // Determine animation duration (hold Shift for slow-motion)
-        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let shiftHeld = NSEvent.modifierFlags.contains(.option)
         let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
 
         // Start close animation on all other panes
@@ -1188,7 +1188,7 @@ class PaneContainerViewModel: ObservableObject {
         }
 
         // Determine animation duration (hold Shift for slow-motion)
-        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let shiftHeld = NSEvent.modifierFlags.contains(.option)
         let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
 
         // Start close animation on all panes
@@ -1269,7 +1269,7 @@ class PaneContainerViewModel: ObservableObject {
         let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
 
         // Determine animation duration (hold Shift for slow-motion)
-        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let shiftHeld = NSEvent.modifierFlags.contains(.option)
         let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
 
         let terminal = TerminalPaneModel(
@@ -1307,7 +1307,7 @@ class PaneContainerViewModel: ObservableObject {
         let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
 
         // Determine animation duration (hold Shift for slow-motion)
-        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let shiftHeld = NSEvent.modifierFlags.contains(.option)
         let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
 
         let browser = BrowserPaneModel(url: url, paneWidth: paneWidth, engine: engine ?? WatchtowerConfig.shared.browserEngine)
@@ -1395,7 +1395,7 @@ class PaneContainerViewModel: ObservableObject {
         guard !panes[index].isClosing else { return }
 
         // Determine animation duration (hold Shift for slow-motion)
-        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+        let shiftHeld = NSEvent.modifierFlags.contains(.option)
         let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
         panes[index].animationDuration = duration
 
