@@ -487,6 +487,8 @@ struct PaneWithHandle: View {
                     viewModel.removePane(byId: pane.id)
                 }, onDragStarted: {
                     viewModel.dragStarted(paneId: pane.id)
+                }, onDragEnded: {
+                    viewModel.cleanupDragState()
                 }, onHeaderTapped: {
                     viewModel.focusPane(id: pane.id)
                 }, onHeaderDoubleTapped: {
@@ -505,6 +507,20 @@ struct PaneWithHandle: View {
                     paneWidth: pane.paneWidth,
                     viewModel: viewModel
                 ))
+                .overlay {
+                    // During internal pane reorder drags, install a top-most
+                    // drop target so embedded NSViews (WKWebView/CEF) can't
+                    // swallow drag events as the cursor moves across content.
+                    if viewModel.draggedPaneId != nil {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onDrop(of: [.text, .url, .fileURL, weblocUTType], delegate: PaneSplitDropDelegate(
+                                paneIndex: index,
+                                paneWidth: pane.paneWidth,
+                                viewModel: viewModel
+                            ))
+                    }
+                }
 
             // Gap between panes: drop indicator overlaid with a full-width resize handle.
             // The resize handle's hit area covers the entire gap so dragging can start
@@ -1092,9 +1108,6 @@ class PaneContainerViewModel: ObservableObject {
         contextualPane?.directory ?? NSHomeDirectory()
     }
 
-    /// Event monitor for detecting when a drag session ends (mouse up).
-    private var dragEndMonitor: Any? = nil
-
     /// Event monitor that forwards horizontal scroll events from browser
     /// panes to the parent horizontal ScrollView. WKWebView captures all
     /// scroll events (breaking pane-to-pane scrolling), so we use a local
@@ -1185,9 +1198,6 @@ class PaneContainerViewModel: ObservableObject {
     }
 
     deinit {
-        if let monitor = dragEndMonitor {
-            NSEvent.removeMonitor(monitor)
-        }
         if let monitor = browserScrollMonitor {
             NSEvent.removeMonitor(monitor)
         }
@@ -1273,18 +1283,6 @@ class PaneContainerViewModel: ObservableObject {
     /// Call when a drag session begins to install cleanup monitoring.
     func dragStarted(paneId: UUID) {
         draggedPaneId = paneId
-
-        // Install a one-shot local event monitor that cleans up drag state
-        // when the mouse button is released (drag session ends).
-        if dragEndMonitor == nil {
-            dragEndMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-                // Delay cleanup slightly so performDrop can fire first
-                DispatchQueue.main.async {
-                    self?.cleanupDragState()
-                }
-                return event
-            }
-        }
     }
 
     /// Reset all drag-related state.
@@ -1296,10 +1294,6 @@ class PaneContainerViewModel: ObservableObject {
         showExternalDropIndicators = false
         for pane in panes {
             pane.isDragging = false
-        }
-        if let monitor = dragEndMonitor {
-            NSEvent.removeMonitor(monitor)
-            dragEndMonitor = nil
         }
     }
 

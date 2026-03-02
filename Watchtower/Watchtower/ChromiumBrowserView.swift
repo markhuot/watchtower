@@ -9,6 +9,12 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
     weak var browser: BrowserPaneModel?
     var isInspectable: Bool = true
 
+    /// While a pane reorder drag is active, this view should not
+    /// participate as an NSDraggingDestination.
+    private var shouldRejectDragDestination: Bool {
+        browser?.viewModel?.draggedPaneId != nil
+    }
+
     /// The CEF browser object. Set in on_after_created.
     var cefBrowser: UnsafeMutablePointer<cef_browser_t>?
 
@@ -193,6 +199,28 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
     override func keyUp(with event: NSEvent) {
         if let browser = browser, browser.isCollapsed { return }
         super.keyUp(with: event)
+    }
+
+    // MARK: - Drag Destination Filtering
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if shouldRejectDragDestination { return [] }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if shouldRejectDragDestination { return [] }
+        return super.draggingUpdated(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if shouldRejectDragDestination { return false }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if shouldRejectDragDestination { return false }
+        return super.performDragOperation(sender)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

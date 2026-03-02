@@ -18,6 +18,9 @@ struct PaneView: View {
     /// Called when a drag starts from this pane's title bar.
     var onDragStarted: (() -> Void)? = nil
 
+    /// Called when a drag session ends (drop or cancel).
+    var onDragEnded: (() -> Void)? = nil
+
     /// Called when the title bar is clicked (to focus the pane).
     var onHeaderTapped: (() -> Void)? = nil
 
@@ -109,6 +112,7 @@ struct PaneView: View {
                             DragSourceView(
                                 pane: pane,
                                 onDragStarted: onDragStarted,
+                                onDragEnded: onDragEnded,
                                 onClicked: onHeaderTapped,
                                 onDoubleClicked: onHeaderDoubleTapped
                             )
@@ -186,6 +190,7 @@ struct PaneView: View {
                     pane: pane,
                     onClose: onClose,
                     onDragStarted: onDragStarted,
+                    onDragEnded: onDragEnded,
                     onHeaderTapped: onHeaderTapped,
                     onHeaderDoubleTapped: onHeaderDoubleTapped
                 )
@@ -244,6 +249,7 @@ struct CollapsedPaneContent: View {
     @ObservedObject private var appManager = GhosttyAppManager.shared
     var onClose: (() -> Void)? = nil
     var onDragStarted: (() -> Void)? = nil
+    var onDragEnded: (() -> Void)? = nil
     var onHeaderTapped: (() -> Void)? = nil
     var onHeaderDoubleTapped: (() -> Void)? = nil
 
@@ -286,6 +292,7 @@ struct CollapsedPaneContent: View {
             DragSourceView(
                 pane: pane,
                 onDragStarted: onDragStarted,
+                onDragEnded: onDragEnded,
                 onClicked: onHeaderTapped,
                 onDoubleClicked: onHeaderDoubleTapped
             )
@@ -483,6 +490,7 @@ struct DragPreviewView: View {
 struct DragSourceView: NSViewRepresentable {
     let pane: PaneModel
     var onDragStarted: (() -> Void)?
+    var onDragEnded: (() -> Void)?
     var onClicked: (() -> Void)?
     var onDoubleClicked: (() -> Void)?
 
@@ -490,6 +498,7 @@ struct DragSourceView: NSViewRepresentable {
         let view = DragSourceNSView()
         view.pane = pane
         view.onDragStarted = onDragStarted
+        view.onDragEnded = onDragEnded
         view.onClicked = onClicked
         view.onDoubleClicked = onDoubleClicked
         return view
@@ -498,6 +507,7 @@ struct DragSourceView: NSViewRepresentable {
     func updateNSView(_ nsView: DragSourceNSView, context: Context) {
         nsView.pane = pane
         nsView.onDragStarted = onDragStarted
+        nsView.onDragEnded = onDragEnded
         nsView.onClicked = onClicked
         nsView.onDoubleClicked = onDoubleClicked
     }
@@ -506,6 +516,7 @@ struct DragSourceView: NSViewRepresentable {
 class DragSourceNSView: NSView, NSDraggingSource {
     var pane: PaneModel!
     var onDragStarted: (() -> Void)?
+    var onDragEnded: (() -> Void)?
     var onClicked: (() -> Void)?
     var onDoubleClicked: (() -> Void)?
 
@@ -575,5 +586,9 @@ class DragSourceNSView: NSView, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         return .move
+    }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        onDragEnded?()
     }
 }
