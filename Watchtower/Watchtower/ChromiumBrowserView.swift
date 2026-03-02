@@ -67,6 +67,15 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
         return nil
     }
 
+    func openWebInspector() {
+        guard isInspectable else { return }
+        guard let cefBrowser = cefBrowser else {
+            NSLog("[CEF] openWebInspector requested before cefBrowser exists")
+            return
+        }
+        cefOpenDevTools(for: cefBrowser, browserModel: browser)
+    }
+
     // MARK: - Pending URL
 
     var pendingURL: String?

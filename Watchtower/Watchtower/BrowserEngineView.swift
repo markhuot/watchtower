@@ -25,6 +25,9 @@ protocol BrowserEngineView: NSView {
 
     /// Execute JavaScript in the main frame and return the result.
     func evaluateJavaScript(_ script: String) async throws -> Any?
+
+    /// Open this engine's web inspector / developer tools UI.
+    func openWebInspector()
 }
 
 // MARK: - App Shortcut Detection
@@ -68,6 +71,7 @@ func isWatchtowerAppShortcut(_ event: NSEvent) -> Bool {
     case ([.command], "["):                return true  // Go Back
     case ([.command], "]"):                return true  // Go Forward
     case ([.command], "r"):                return true  // Reload Page
+    case ([.command, .shift], "i"):        return true  // Open Web Inspector
 
     default: return false
     }

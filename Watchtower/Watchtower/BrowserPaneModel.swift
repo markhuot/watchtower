@@ -104,6 +104,11 @@ class BrowserPaneModel: PaneModel {
         }
     }
 
+    /// Open the browser engine's web inspector / developer tools.
+    func openWebInspector() {
+        engineView?.openWebInspector()
+    }
+
     /// Switch this pane to a different rendering engine. Clears the current
     /// engine view reference so the SwiftUI view layer re-creates it with
     /// the new engine.

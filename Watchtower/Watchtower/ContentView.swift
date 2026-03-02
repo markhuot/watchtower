@@ -609,25 +609,17 @@ struct PaneDropDelegate: DropDelegate {
 
     func dropEntered(info: DropInfo) {
         guard !viewModel.isHandlingExternalDrop else { return }
-        if viewModel.draggedPaneId == nil && info.hasItemsConforming(to: [.url, .text, .fileURL, weblocUTType]) {
-            viewModel.isExternalURLDrag = true
-            viewModel.showExternalDropIndicators = true
-        }
+        beginExternalDragIfNeeded(info, viewModel: viewModel)
         withAnimation(.easeInOut(duration: 0.15)) {
             viewModel.dropTargetIndex = targetSlot
         }
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        if viewModel.isHandlingExternalDrop {
-            return DropProposal(operation: .copy)
-        }
-        if viewModel.draggedPaneId == nil && info.hasItemsConforming(to: [.url, .text, .fileURL, weblocUTType]) {
-            viewModel.isExternalURLDrag = true
-            viewModel.showExternalDropIndicators = true
-        }
+        if viewModel.isHandlingExternalDrop { return externalAwareDropProposal(viewModel: viewModel) }
+        beginExternalDragIfNeeded(info, viewModel: viewModel)
         viewModel.dropTargetIndex = targetSlot
-        return DropProposal(operation: viewModel.draggedPaneId != nil ? .move : .copy)
+        return externalAwareDropProposal(viewModel: viewModel)
     }
 
     func dropExited(info: DropInfo) {
@@ -640,33 +632,11 @@ struct PaneDropDelegate: DropDelegate {
     }
 
     func dropEnded(info: DropInfo) {
-        if viewModel.draggedPaneId == nil {
-            viewModel.isExternalURLDrag = false
-            viewModel.showExternalDropIndicators = false
-            viewModel.dropTargetIndex = nil
-        }
+        clearExternalDragUIIfNeeded(viewModel)
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        // Internal pane reorder
-        if let draggedId = viewModel.draggedPaneId {
-            viewModel.movePane(id: draggedId, toSlot: targetSlot)
-            viewModel.cleanupDragState()
-            return true
-        }
-
-        // External URL drop
-        if loadURLFromDrop(info, completion: { url in
-            if viewModel.isHandlingExternalDrop { return }
-            viewModel.isHandlingExternalDrop = true
-            viewModel.insertBrowser(url: url, atSlot: targetSlot)
-            viewModel.cleanupDragState()
-        }) {
-            return true
-        }
-
-        viewModel.cleanupDragState()
-        return false
+        performPaneOrExternalDrop(info: info, targetSlot: targetSlot, viewModel: viewModel)
     }
 
     func validateDrop(info: DropInfo) -> Bool {
@@ -694,10 +664,7 @@ struct PaneSplitDropDelegate: DropDelegate {
 
     func dropEntered(info: DropInfo) {
         guard !viewModel.isHandlingExternalDrop else { return }
-        if viewModel.draggedPaneId == nil && info.hasItemsConforming(to: [.url, .text, .fileURL, weblocUTType]) {
-            viewModel.isExternalURLDrag = true
-            viewModel.showExternalDropIndicators = true
-        }
+        beginExternalDragIfNeeded(info, viewModel: viewModel)
         let slot = slotForLocation(info)
         withAnimation(.easeInOut(duration: 0.15)) {
             viewModel.dropTargetIndex = slot
@@ -705,20 +672,15 @@ struct PaneSplitDropDelegate: DropDelegate {
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        if viewModel.isHandlingExternalDrop {
-            return DropProposal(operation: .copy)
-        }
-        if viewModel.draggedPaneId == nil && info.hasItemsConforming(to: [.url, .text, .fileURL, weblocUTType]) {
-            viewModel.isExternalURLDrag = true
-            viewModel.showExternalDropIndicators = true
-        }
+        if viewModel.isHandlingExternalDrop { return externalAwareDropProposal(viewModel: viewModel) }
+        beginExternalDragIfNeeded(info, viewModel: viewModel)
         let slot = slotForLocation(info)
         if viewModel.dropTargetIndex != slot {
             withAnimation(.easeInOut(duration: 0.15)) {
                 viewModel.dropTargetIndex = slot
             }
         }
-        return DropProposal(operation: viewModel.draggedPaneId != nil ? .move : .copy)
+        return externalAwareDropProposal(viewModel: viewModel)
     }
 
     func dropExited(info: DropInfo) {
@@ -728,40 +690,65 @@ struct PaneSplitDropDelegate: DropDelegate {
     }
 
     func dropEnded(info: DropInfo) {
-        if viewModel.draggedPaneId == nil {
-            viewModel.isExternalURLDrag = false
-            viewModel.showExternalDropIndicators = false
-            viewModel.dropTargetIndex = nil
-        }
+        clearExternalDragUIIfNeeded(viewModel)
     }
 
     func performDrop(info: DropInfo) -> Bool {
         let slot = slotForLocation(info)
-
-        // Internal pane reorder
-        if let draggedId = viewModel.draggedPaneId {
-            viewModel.movePane(id: draggedId, toSlot: slot)
-            viewModel.cleanupDragState()
-            return true
-        }
-
-        // External URL drop
-        if loadURLFromDrop(info, completion: { url in
-            if viewModel.isHandlingExternalDrop { return }
-            viewModel.isHandlingExternalDrop = true
-            viewModel.insertBrowser(url: url, atSlot: slot)
-            viewModel.cleanupDragState()
-        }) {
-            return true
-        }
-
-        viewModel.cleanupDragState()
-        return false
+        return performPaneOrExternalDrop(info: info, targetSlot: slot, viewModel: viewModel)
     }
 
     func validateDrop(info: DropInfo) -> Bool {
         return viewModel.draggedPaneId != nil || info.hasItemsConforming(to: [.url, .text, .fileURL, weblocUTType])
     }
+}
+
+private func beginExternalDragIfNeeded(_ info: DropInfo, viewModel: PaneContainerViewModel) {
+    if viewModel.draggedPaneId == nil && info.hasItemsConforming(to: [.url, .text, .fileURL, weblocUTType]) {
+        viewModel.isExternalURLDrag = true
+        viewModel.showExternalDropIndicators = true
+    }
+}
+
+private func clearExternalDragUIIfNeeded(_ viewModel: PaneContainerViewModel) {
+    if viewModel.draggedPaneId == nil {
+        viewModel.isExternalURLDrag = false
+        viewModel.showExternalDropIndicators = false
+        viewModel.dropTargetIndex = nil
+        viewModel.isHandlingExternalDrop = false
+    }
+}
+
+private func externalAwareDropProposal(viewModel: PaneContainerViewModel) -> DropProposal {
+    DropProposal(operation: viewModel.draggedPaneId != nil ? .move : .copy)
+}
+
+private func performPaneOrExternalDrop(info: DropInfo, targetSlot: Int, viewModel: PaneContainerViewModel) -> Bool {
+    if let draggedId = viewModel.draggedPaneId {
+        viewModel.movePane(id: draggedId, toSlot: targetSlot)
+        viewModel.cleanupDragState()
+        return true
+    }
+
+    if loadURLFromDrop(info, completion: { url in
+        viewModel.insertBrowser(url: url, atSlot: targetSlot)
+    }) {
+        markExternalDropAccepted(viewModel)
+        return true
+    }
+
+    viewModel.cleanupDragState()
+    return false
+}
+
+/// Marks that an external URL drop has been accepted and immediately clears
+/// all transient drag UI so indicators don't linger while async URL loading
+/// finishes.
+private func markExternalDropAccepted(_ viewModel: PaneContainerViewModel) {
+    viewModel.isHandlingExternalDrop = true
+    viewModel.isExternalURLDrag = false
+    viewModel.showExternalDropIndicators = false
+    viewModel.dropTargetIndex = nil
 }
 
 // MARK: - URL Drop Helper
@@ -863,7 +850,7 @@ private func loadURLFromDrop(_ info: DropInfo, completion: @escaping (URL) -> Vo
             guard let string = object as? String,
                   let url = URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines)),
                   url.scheme != nil else { return }
-            DispatchQueue.main.async { completion(url) }
+            DispatchQueue.main.async { completeOnce(url) }
         }
         return true
     }
@@ -942,6 +929,7 @@ struct WindowDropDelegate: DropDelegate {
     }
 
     func dropEntered(info: DropInfo) {
+        guard !viewModel.isHandlingExternalDrop else { return }
         guard isExternalDrag else { return }
         if let slot = resolveEdgeSlot(for: info.location) {
             viewModel.dropTargetIndex = slot
@@ -951,6 +939,9 @@ struct WindowDropDelegate: DropDelegate {
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
+        if viewModel.isHandlingExternalDrop {
+            return DropProposal(operation: .copy)
+        }
         guard isExternalDrag else { return DropProposal(operation: .move) }
         if let slot = resolveEdgeSlot(for: info.location) {
             if viewModel.dropTargetIndex != slot {
@@ -965,18 +956,20 @@ struct WindowDropDelegate: DropDelegate {
     }
 
     func dropExited(info: DropInfo) {
-        if isExternalDrag && !viewModel.isHandlingExternalDrop {
+        if isExternalDrag {
             viewModel.showExternalDropIndicators = false
             viewModel.isExternalURLDrag = false
             viewModel.dropTargetIndex = nil
+            viewModel.isHandlingExternalDrop = false
         }
     }
 
     func dropEnded(info: DropInfo) {
-        if isExternalDrag && !viewModel.isHandlingExternalDrop {
+        if isExternalDrag {
             viewModel.showExternalDropIndicators = false
             viewModel.isExternalURLDrag = false
             viewModel.dropTargetIndex = nil
+            viewModel.isHandlingExternalDrop = false
         }
     }
 
@@ -985,13 +978,9 @@ struct WindowDropDelegate: DropDelegate {
         guard let slot = resolveEdgeSlot(for: info.location) else { return false }
 
         if loadURLFromDrop(info, completion: { url in
-            if viewModel.isHandlingExternalDrop { return }
-            viewModel.isHandlingExternalDrop = true
             viewModel.insertBrowser(url: url, atSlot: slot)
-            viewModel.cleanupDragState()
         }) {
-            viewModel.showExternalDropIndicators = false
-            viewModel.dropTargetIndex = nil
+            markExternalDropAccepted(viewModel)
             return true
         }
 
@@ -1624,6 +1613,24 @@ class PaneContainerViewModel: ObservableObject {
         }
     }
 
+    /// Resolve the initial width for a newly created terminal pane.
+    /// Inherit width only when the contextual pane is also a terminal.
+    private func terminalPaneWidthForNewPane(sourcePane: PaneModel?) -> CGFloat {
+        guard let terminal = sourcePane as? TerminalPaneModel else {
+            return PaneModel.defaultPaneWidth
+        }
+        return terminal.paneWidth
+    }
+
+    /// Resolve the initial width for a newly created browser pane.
+    /// Inherit width only when the contextual pane is also a browser.
+    private func browserPaneWidthForNewPane(sourcePane: PaneModel?) -> CGFloat {
+        guard let browser = sourcePane as? BrowserPaneModel else {
+            return PaneModel.defaultPaneWidth
+        }
+        return browser.paneWidth
+    }
+
     /// Exit focus mode if it is currently active.
     func exitFocusMode() {
         guard isFocusMode else { return }
@@ -1659,13 +1666,13 @@ class PaneContainerViewModel: ObservableObject {
 
     @discardableResult
     func addTerminal(directory: String? = nil, initialInput: String? = nil) -> TerminalPaneModel {
-        // Inherit the working directory and pane width from the contextual
-        // pane, falling back to defaults when nothing is focused.
+        // Inherit the working directory from the contextual pane.
+        // Width is inherited only when the contextual pane is also a terminal.
         let sourcePane = contextualPane
         let resolvedDirectory = directory
             ?? sourcePane?.directory
             ?? NSHomeDirectory()
-        let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
+        let paneWidth = terminalPaneWidthForNewPane(sourcePane: sourcePane)
 
         // Determine animation duration (hold Shift for slow-motion)
         let shiftHeld = NSEvent.modifierFlags.contains(.option)
@@ -1703,7 +1710,7 @@ class PaneContainerViewModel: ObservableObject {
     @discardableResult
     func addBrowser(url: URL = URL(string: "about:blank")!, engine: BrowserEngine? = nil) -> BrowserPaneModel {
         let sourcePane = contextualPane
-        let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
+        let paneWidth = browserPaneWidthForNewPane(sourcePane: sourcePane)
 
         // Determine animation duration (hold Shift for slow-motion)
         let shiftHeld = NSEvent.modifierFlags.contains(.option)
@@ -1780,7 +1787,7 @@ class PaneContainerViewModel: ObservableObject {
     /// 0 = before first pane, panes.count = after last pane.
     @discardableResult
     func insertBrowser(url: URL, atSlot slot: Int) -> BrowserPaneModel {
-        let paneWidth = contextualPane?.paneWidth ?? PaneModel.defaultPaneWidth
+        let paneWidth = browserPaneWidthForNewPane(sourcePane: contextualPane)
 
         let shiftHeld = NSEvent.modifierFlags.contains(.option)
         let duration: TimeInterval = shiftHeld ? 3.0 : 0.2
@@ -2171,7 +2178,7 @@ class PaneContainerViewModel: ObservableObject {
 
         let sourcePane = contextualPane
         let directory = sourcePane?.directory ?? NSHomeDirectory()
-        let paneWidth = sourcePane?.paneWidth ?? PaneModel.defaultPaneWidth
+        let paneWidth = terminalPaneWidthForNewPane(sourcePane: sourcePane)
 
         // Build environment variables
         var env: [String: String] = values

@@ -92,6 +92,30 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
         _ = super.reload()
     }
 
+    func openWebInspector() {
+        // WKWebView doesn't expose a stable public API to programmatically open
+        // the inspector window. Try known WebKit selectors used by AppKit menu
+        // plumbing and gracefully no-op if unavailable.
+        let selectors = [
+            NSSelectorFromString("_showWebInspector:"),
+            NSSelectorFromString("showWebInspector:"),
+            NSSelectorFromString("_inspectElement:")
+        ]
+
+        for selector in selectors where responds(to: selector) {
+            _ = perform(selector, with: nil)
+            return
+        }
+
+        for selector in selectors {
+            if NSApp.sendAction(selector, to: nil, from: self) {
+                return
+            }
+        }
+
+        logger.debug("Web inspector selector not available for WKWebView")
+    }
+
     override var acceptsFirstResponder: Bool { true }
 
     override func becomeFirstResponder() -> Bool {
