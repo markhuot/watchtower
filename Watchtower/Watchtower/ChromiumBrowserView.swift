@@ -119,11 +119,6 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
                 }
             }
 
-            scrollToVisibleInEnclosingScrollView()
-            DispatchQueue.main.async { [weak self] in
-                self?.scrollToVisibleInEnclosingScrollView()
-            }
-
             if let host = cefBrowser?.pointee.get_host?(cefBrowser!) {
                 host.pointee.set_focus?(host, 1)
                 _ = host.pointee.base.release?(&host.pointee.base)

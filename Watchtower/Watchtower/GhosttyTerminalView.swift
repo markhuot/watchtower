@@ -327,15 +327,6 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
                 }
             }
 
-            scrollToVisibleInEnclosingScrollView()
-
-            // In focus mode the pane width changes after focusModePaneId is
-            // updated, but SwiftUI lays out asynchronously. Schedule a
-            // second scroll after the layout pass so the fully-expanded
-            // pane is brought into view.
-            DispatchQueue.main.async { [weak self] in
-                self?.scrollToVisibleInEnclosingScrollView()
-            }
         }
         return result
     }

@@ -297,6 +297,9 @@ struct CommandPaletteView: View {
         items.append(.builtIn(name: "Fit Panes to Window") { vm in
             vm.fitPanesToWindow()
         })
+        items.append(.builtIn(name: "Center Pane") { vm in
+            vm.centerPane()
+        })
         items.append(CommandPaletteItem(
             displayName: "Set Pane Color",
             description: "Change the header color of the focused pane",

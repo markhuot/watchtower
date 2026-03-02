@@ -96,6 +96,34 @@ struct ContentView: View {
                         }
                         .coordinateSpace(name: "WindowSpace")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .onChange(of: viewModel.focusedPaneId) { targetId in
+                            guard let targetId = targetId else { return }
+                            DispatchQueue.main.async {
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    scrollProxy.scrollTo(targetId)
+                                }
+                                DispatchQueue.main.async {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        scrollProxy.scrollTo(targetId)
+                                    }
+                                }
+                                viewModel.focusedPaneId = nil
+                            }
+                        }
+                        .onChange(of: viewModel.centeredPaneId) { targetId in
+                            guard let targetId = targetId else { return }
+                            DispatchQueue.main.async {
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    scrollProxy.scrollTo(targetId, anchor: .center)
+                                }
+                                DispatchQueue.main.async {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        scrollProxy.scrollTo(targetId, anchor: .center)
+                                    }
+                                }
+                                viewModel.centeredPaneId = nil
+                            }
+                        }
                         // Scroll to the focused pane when entering focus mode
                         .onChange(of: viewModel.isFocusMode) { isFocused in
                             if isFocused, let targetId = viewModel.focusModePaneId {
@@ -966,6 +994,14 @@ class PaneContainerViewModel: ObservableObject {
     /// The ID of the pane currently being dragged.
     @Published var draggedPaneId: UUID? = nil
 
+    /// The ID of the pane that should be minimally scrolled into view.
+    /// Used by keyboard focus navigation and pane creation.
+    @Published var focusedPaneId: UUID? = nil
+
+    /// The ID of the pane that should be centered in the viewport.
+    /// Used only for explicit "Center Pane" actions.
+    @Published var centeredPaneId: UUID? = nil
+
     /// Whether an external URL drag (from another app) is active over this window.
     @Published var isExternalURLDrag: Bool = false
 
@@ -1562,44 +1598,36 @@ class PaneContainerViewModel: ObservableObject {
     func centerPane(_ pane: PaneModel? = nil) {
         let target = pane ?? contextualPane
         guard let target = target else { return }
-        guard let window = NSApp.keyWindow,
-              let contentView = window.contentView else { return }
 
-        // Find the NSView for this pane
-        let paneNSView: NSView?
-        if target is TerminalPaneModel {
-            paneNSView = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
-                .first(where: { $0.terminal.id == target.id })
-        } else if target is BrowserPaneModel {
-            paneNSView = findBrowserEngineView(for: target.id, in: contentView) as? NSView
+        requestCenteredScroll(to: target.id)
+    }
+
+    /// Triggers minimal scrolling so a pane is brought into view.
+    /// If the pane is already the active target, toggles through nil so
+    /// `onChange` still fires.
+    private func requestRevealScroll(to paneId: UUID) {
+        if focusedPaneId == paneId {
+            focusedPaneId = nil
+            DispatchQueue.main.async { [weak self] in
+                self?.focusedPaneId = paneId
+            }
         } else {
-            paneNSView = nil
+            focusedPaneId = paneId
         }
-        guard let paneView = paneNSView else { return }
+    }
 
-        // Find the parent horizontal NSScrollView
-        guard let scrollView = findHorizontalScrollView(from: paneView) else { return }
-
-        let clipView = scrollView.contentView
-
-        // Convert the pane view's frame to the clip view's coordinate space
-        let paneFrameInClip = paneView.convert(paneView.bounds, to: clipView)
-        let paneCenterX = paneFrameInClip.midX
-        let visibleWidth = clipView.bounds.width
-
-        // Compute origin that centers the pane
-        var newOriginX = paneCenterX - visibleWidth / 2
-
-        // Clamp to valid scroll range
-        let maxScrollX = max(0, (scrollView.documentView?.frame.width ?? 0) - visibleWidth)
-        newOriginX = min(max(0, newOriginX), maxScrollX)
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.3
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            clipView.animator().setBoundsOrigin(NSPoint(x: newOriginX, y: clipView.bounds.origin.y))
+    /// Triggers centered scrolling for a pane via `centeredPaneId`.
+    /// If the pane is already the active target, toggles through nil so
+    /// `onChange` still fires and re-centers.
+    private func requestCenteredScroll(to paneId: UUID) {
+        if centeredPaneId == paneId {
+            centeredPaneId = nil
+            DispatchQueue.main.async { [weak self] in
+                self?.centeredPaneId = paneId
+            }
+        } else {
+            centeredPaneId = paneId
         }
-        scrollView.reflectScrolledClipView(clipView)
     }
 
     /// Exit focus mode if it is currently active.
@@ -1994,6 +2022,10 @@ class PaneContainerViewModel: ObservableObject {
     /// immediately and fulfill the token. If not (just created), the token
     /// remains pending and viewDidMoveToWindow will pick it up.
     func focusPane(_ pane: PaneModel) {
+        // Ensure focused pane is visible (minimal scroll, no centering).
+        // This must happen before any early returns below.
+        requestRevealScroll(to: pane.id)
+
         // Auto-dismiss the command palette when focus moves to a different pane.
         if let paletteId = commandPalettePaneId, paletteId != pane.id {
             commandPalettePaneId = nil

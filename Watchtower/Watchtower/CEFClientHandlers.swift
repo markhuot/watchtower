@@ -610,11 +610,6 @@ private func cefMakeFocusHandler(context: CEFClientContext) -> UnsafeMutablePoin
                 }
             }
 
-            // Scroll the pane into view
-            ctx.browserView?.scrollToVisibleInEnclosingScrollView()
-            DispatchQueue.main.async {
-                ctx.browserView?.scrollToVisibleInEnclosingScrollView()
-            }
         }
     }
 
