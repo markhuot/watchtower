@@ -644,6 +644,7 @@ struct CommandPaletteView: View {
                     ? "Pick a color or enter hex (#RRGGBB)\u{2026}"
                     : "Filter commands\u{2026}",
                 selectAllOnAppear: viewModel.commandPaletteInitialText != nil,
+                onClosePane: { viewModel.closeCurrentPane() },
                 onArrowUp: { moveSelection(by: -1) },
                 onArrowDown: { moveSelection(by: 1) },
                 onJumpUp: { jumpSectionUp() },
@@ -1004,6 +1005,7 @@ struct CommandPaletteTextField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String = "Filter commands\u{2026}"
     var selectAllOnAppear: Bool = false
+    var onClosePane: () -> Void
     var onArrowUp: () -> Void
     var onArrowDown: () -> Void
     var onJumpUp: () -> Void
@@ -1033,6 +1035,7 @@ struct CommandPaletteTextField: NSViewRepresentable {
 
         // Placeholder support is handled via the custom subclass
         textView.placeholderString = placeholder
+        textView.onPerformClose = onClosePane
 
         // Pre-fill text if provided (e.g. browser URL from Cmd+L)
         if !text.isEmpty {
@@ -1066,6 +1069,7 @@ struct CommandPaletteTextField: NSViewRepresentable {
             nsView.placeholderString = placeholder
             nsView.needsDisplay = true
         }
+        nsView.onPerformClose = onClosePane
     }
 
     class Coordinator: NSObject, NSTextViewDelegate {
@@ -1126,6 +1130,15 @@ struct CommandPaletteTextField: NSViewRepresentable {
 /// text layout (for auto-growing height) and placeholder text rendering.
 class PaletteTextView: NSTextView {
     var placeholderString: String? = nil
+    var onPerformClose: (() -> Void)? = nil
+
+    @objc func performClose(_ sender: Any?) {
+        if let onPerformClose {
+            onPerformClose()
+        } else {
+            window?.performClose(sender)
+        }
+    }
 
     override var intrinsicContentSize: NSSize {
         guard let layoutManager = layoutManager,
