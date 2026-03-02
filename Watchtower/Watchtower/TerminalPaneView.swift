@@ -167,11 +167,11 @@ struct PaneView: View {
                             ChromiumBrowserRepresentable(browser: browser)
                         }
                     }
-                    // During pane drag reorder, block the browser from
-                    // intercepting the AppKit drag session. WKWebView and CEF
+                    // During pane drag reorder or external URL drag, block the
+                    // browser from intercepting the drag session. WKWebView and CEF
                     // register as NSDraggingDestination which steals the drag,
                     // preventing drops on neighboring panes.
-                    .allowsHitTesting(viewModel.draggedPaneId == nil)
+                    .allowsHitTesting(viewModel.draggedPaneId == nil && !viewModel.isExternalURLDrag)
                 }
             }
             .frame(width: pane.isCollapsed ? PaneModel.collapsedPaneWidth : nil)

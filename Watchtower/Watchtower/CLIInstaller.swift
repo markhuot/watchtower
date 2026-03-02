@@ -24,9 +24,45 @@ enum CLIInstaller {
         return FileManager.default.fileExists(atPath: path.path)
     }
 
-    /// Whether we should prompt the user to install the CLI.
-    static var shouldPrompt: Bool {
-        !isInstalled && isBundled && !WatchtowerConfig.shared.cliInstallDismissed
+    static func shouldPrompt(dismissed: Bool) -> Bool {
+        switch status() {
+        case .installedOutdated:
+            return true
+        case .notInstalled:
+            return !dismissed
+        default:
+            return false
+        }
+    }
+
+    static func status() -> CLIInstallState {
+        if !isBundled {
+            return .notBundled
+        }
+
+        let bundledVersion = bundledVersion()
+
+        if !isInstalled {
+            return .notInstalled(bundledVersion: bundledVersion)
+        }
+
+        let installedVersion = installedVersion()
+
+        guard
+            let bundledVersion,
+            let installedVersion,
+            let comparison = compareVersions(installedVersion, bundledVersion)
+        else {
+            return .installedCurrent(version: installedVersion)
+        }
+
+        if comparison == 0 {
+            return .installedCurrent(version: installedVersion)
+        } else if comparison < 0 {
+            return .installedOutdated(installed: installedVersion, bundled: bundledVersion)
+        } else {
+            return .installedNewer(installed: installedVersion, bundled: bundledVersion)
+        }
     }
 
     /// Install the CLI by creating a symlink from /usr/local/bin/watchtower
@@ -69,6 +105,16 @@ enum CLIInstaller {
         logger.info("CLI installed with privileges: \(self.installPath) -> \(bundledPath.path)")
     }
 
+    static func bundledVersion() -> String? {
+        guard let bundledPath = bundledBinaryPath else { return nil }
+        return readVersion(at: bundledPath.path)
+    }
+
+    static func installedVersion() -> String? {
+        guard isInstalled else { return nil }
+        return readVersion(at: installPath)
+    }
+
     private static func installSymlink(to target: String) throws {
         let fm = FileManager.default
         let installDir = (installPath as NSString).deletingLastPathComponent
@@ -84,6 +130,66 @@ enum CLIInstaller {
 
         try fm.createSymbolicLink(atPath: installPath, withDestinationPath: target)
     }
+
+    private static func readVersion(at path: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["--version"]
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+
+        do {
+            try process.run()
+        } catch {
+            logger.info("Failed to run CLI for version: \(error.localizedDescription)")
+            return nil
+        }
+
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            logger.info("CLI version command failed with code \(process.terminationStatus)")
+            return nil
+        }
+
+        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        return extractVersion(from: output)
+    }
+
+    private static func extractVersion(from output: String) -> String? {
+        let pattern = #"\b\d+\.\d+\.\d+\b"#
+        guard let range = output.range(of: pattern, options: .regularExpression) else {
+            return nil
+        }
+        return String(output[range])
+    }
+
+    private static func compareVersions(_ lhs: String, _ rhs: String) -> Int? {
+        let lhsParts = lhs.split(separator: ".").compactMap { Int($0) }
+        let rhsParts = rhs.split(separator: ".").compactMap { Int($0) }
+
+        guard lhsParts.count == 3, rhsParts.count == 3 else { return nil }
+
+        for index in 0..<3 {
+            if lhsParts[index] != rhsParts[index] {
+                return lhsParts[index] < rhsParts[index] ? -1 : 1
+            }
+        }
+
+        return 0
+    }
+}
+
+enum CLIInstallState: Equatable {
+    case notBundled
+    case notInstalled(bundledVersion: String?)
+    case installedCurrent(version: String?)
+    case installedOutdated(installed: String?, bundled: String?)
+    case installedNewer(installed: String?, bundled: String?)
+    case error(String)
 }
 
 enum CLIInstallerError: LocalizedError {

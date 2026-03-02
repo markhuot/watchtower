@@ -16,6 +16,7 @@ import os
 ///   { "command": "new-terminal", "paneId": "...", "directory": "/...", "shellCommand": "..." }
 ///   { "command": "new-browser",  "paneId": "...", "url": "https://...", "engine": "webkit|chromium", "remoteDebuggingPort": 9222 }
 ///   { "command": "close-pane",   "paneId": "..." }
+///   { "command": "center-pane",  "paneId": "..." }
 ///
 /// Response format:
 ///   { "ok": true, "paneId": "..." }
@@ -297,6 +298,8 @@ final class IPCServer {
             return handleCollapsePane(viewModel: viewModel)
         case "expand-pane":
             return handleExpandPane(viewModel: viewModel)
+        case "center-pane":
+            return handleCenterPane(viewModel: viewModel)
         case "fit-panes":
             return handleFitPanes(viewModel: viewModel)
         case "go-back":
@@ -452,6 +455,13 @@ final class IPCServer {
 
     private func handleExpandPane(viewModel: PaneContainerViewModel) -> [String: Any] {
         viewModel.expandPane()
+        return ["ok": true]
+    }
+
+    // MARK: - Center Pane
+
+    private func handleCenterPane(viewModel: PaneContainerViewModel) -> [String: Any] {
+        viewModel.centerPane()
         return ["ok": true]
     }
 

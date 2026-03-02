@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject private var config = WatchtowerConfig.shared
-    @State private var cliInstallStatus: CLIInstallStatus = .unknown
+    @State private var cliInstallStatus: CLIInstallState = .notBundled
 
     var body: some View {
         TabView {
@@ -60,22 +60,52 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Command Line Interface")
                         switch cliInstallStatus {
-                        case .unknown:
-                            Text("Checking...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case .installed:
-                            Text("Installed at \(CLIInstaller.installPath)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case .notInstalled:
-                            Text("Not installed")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         case .notBundled:
                             Text("CLI binary not found in app bundle")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                        case .notInstalled(let bundledVersion):
+                            if let bundledVersion {
+                                Text("Not installed (bundled v\(bundledVersion))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Not installed")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        case .installedCurrent(let version):
+                            if let version {
+                                Text("Installed v\(version) at \(CLIInstaller.installPath)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Installed at \(CLIInstaller.installPath)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        case .installedOutdated(let installed, let bundled):
+                            let installedText = installed ?? "unknown"
+                            if let bundled {
+                                Text("Outdated (installed v\(installedText), bundled v\(bundled))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Outdated (installed v\(installedText))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        case .installedNewer(let installed, let bundled):
+                            let installedText = installed ?? "unknown"
+                            if let bundled {
+                                Text("Installed newer v\(installedText) (bundled v\(bundled))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Installed newer v\(installedText)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         case .error(let message):
                             Text(message)
                                 .font(.caption)
@@ -85,14 +115,21 @@ struct SettingsView: View {
 
                     Spacer()
 
-                    if cliInstallStatus == .installed {
+                    switch cliInstallStatus {
+                    case .installedCurrent:
                         Button("Reinstall") {
                             performInstall()
                         }
-                    } else if cliInstallStatus == .notInstalled {
+                    case .installedOutdated:
+                        Button("Update") {
+                            performInstall()
+                        }
+                    case .notInstalled:
                         Button("Install") {
                             performInstall()
                         }
+                    default:
+                        EmptyView()
                     }
                 }
             }
@@ -106,29 +143,15 @@ struct SettingsView: View {
     }
 
     private func checkCLIStatus() {
-        if !CLIInstaller.isBundled {
-            cliInstallStatus = .notBundled
-        } else if CLIInstaller.isInstalled {
-            cliInstallStatus = .installed
-        } else {
-            cliInstallStatus = .notInstalled
-        }
+        cliInstallStatus = CLIInstaller.status()
     }
 
     private func performInstall() {
         do {
             try CLIInstaller.install()
-            cliInstallStatus = .installed
+            cliInstallStatus = CLIInstaller.status()
         } catch {
             cliInstallStatus = .error(error.localizedDescription)
         }
     }
-}
-
-private enum CLIInstallStatus: Equatable {
-    case unknown
-    case installed
-    case notInstalled
-    case notBundled
-    case error(String)
 }

@@ -139,6 +139,29 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		AA0000100000000000000003 /* Build CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/cli/package.json",
+				"$(SRCROOT)/cli/bun.lockb",
+				"$(SRCROOT)/cli/src/index.ts",
+			);
+			name = "Build CLI";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/cli/watchtower",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -e\n\nexport PATH=\"$HOME/.bun/bin:$PATH\"\n\nif ! command -v bun >/dev/null 2>&1; then\n  if [ -x /opt/homebrew/bin/bun ]; then\n    export PATH=\"/opt/homebrew/bin:$PATH\"\n  fi\nfi\n\nif ! command -v bun >/dev/null 2>&1; then\n  echo \"error: bun is required to build the Watchtower CLI\"\n  echo \"Install from https://bun.sh and re-run the build.\"\n  exit 1\nfi\n\ncd \"${SRCROOT}/cli\"\nbun install\nbun build --compile src/index.ts --outfile watchtower\n";
+		};
 		AA0000100000000000000002 /* Create CEF Helper Variants */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -309,6 +332,7 @@
 			buildPhases = (
 				AA00000A0000000000000001 /* Sources */,
 				AA0000040000000000000001 /* Frameworks */,
+				AA0000100000000000000003 /* Build CLI */,
 				AA00000B0000000000000001 /* Resources */,
 				AA00000B0000000000000002 /* Embed Frameworks */,
 				AA00000B0000000000000003 /* Embed Helpers */,

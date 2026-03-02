@@ -6,17 +6,20 @@ struct CLIInstallSheet: View {
     @State private var dontAskAgain = false
     @State private var installError: String?
     @State private var installed = false
+    @State private var status: CLIInstallState = .notBundled
 
     var body: some View {
+        let title = sheetTitle
+        let description = sheetDescription
         VStack(spacing: 16) {
             Image(systemName: "terminal")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
 
-            Text("Install Watchtower CLI?")
+            Text(title)
                 .font(.headline)
 
-            Text("The Watchtower CLI lets you open terminals, browsers, and manage panes from the command line. It will be installed to /usr/local/bin/watchtower.")
+            Text(description)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 320)
@@ -29,7 +32,7 @@ struct CLIInstallSheet: View {
             }
 
             if installed {
-                Label("CLI installed successfully", systemImage: "checkmark.circle.fill")
+                Label(successLabel, systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             }
 
@@ -43,11 +46,12 @@ struct CLIInstallSheet: View {
                     }
                     .keyboardShortcut(.escape)
 
-                    Button("Install") {
+                    Button(actionLabel) {
                         installError = nil
                         do {
                             try CLIInstaller.install()
                             installed = true
+                            status = CLIInstaller.status()
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                                 isPresented = false
                             }
@@ -73,5 +77,61 @@ struct CLIInstallSheet: View {
         }
         .padding(24)
         .frame(width: 400)
+        .onAppear {
+            status = CLIInstaller.status()
+        }
+        .onChange(of: dontAskAgain) { value in
+            if value {
+                config.cliInstallDismissed = true
+            }
+        }
+    }
+
+    private var actionLabel: String {
+        switch status {
+        case .installedOutdated:
+            return "Update"
+        default:
+            return "Install"
+        }
+    }
+
+    private var successLabel: String {
+        switch status {
+        case .installedOutdated:
+            return "CLI updated successfully"
+        default:
+            return "CLI installed successfully"
+        }
+    }
+
+    private var sheetTitle: String {
+        switch status {
+        case .installedOutdated:
+            return "Update Watchtower CLI?"
+        default:
+            return "Install Watchtower CLI?"
+        }
+    }
+
+    private var sheetDescription: String {
+        let base = "The Watchtower CLI lets you open terminals, browsers, and manage panes from the command line. It will be installed to /usr/local/bin/watchtower."
+        switch status {
+        case .installedOutdated(let installed, let bundled):
+            var details = ""
+            if let installed, let bundled {
+                details = " You have v\(installed) installed and v\(bundled) is bundled."
+            } else if let bundled {
+                details = " A newer bundled version (v\(bundled)) is available."
+            }
+            return base + details
+        case .notInstalled(let bundled):
+            if let bundled {
+                return base + " Bundled version: v\(bundled)."
+            }
+            return base
+        default:
+            return base
+        }
     }
 }

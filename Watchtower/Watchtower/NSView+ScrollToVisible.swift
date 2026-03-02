@@ -1,12 +1,13 @@
 import AppKit
+import WebKit
 
 extension NSView {
     /// If this view is inside a scroll view and not fully visible,
     /// scroll just enough to bring it on screen with a 10px buffer.
     func scrollToVisibleInEnclosingScrollView() {
         // Walk up the view hierarchy to find the NSScrollView backing
-        // SwiftUI's ScrollView.
-        guard let scrollView = enclosingScrollView else { return }
+        // SwiftUI's ScrollView. Skip any internal WebKit/Chromium scroll views.
+        guard let scrollView = findOuterScrollView() else { return }
 
         let clipView = scrollView.contentView
 
@@ -42,6 +43,33 @@ extension NSView {
             }
             scrollView.reflectScrolledClipView(clipView)
         }
+    }
+
+    /// Walk up the view hierarchy to find the outer horizontal scroll view,
+    /// skipping internal scroll views used by WKWebView or Chromium.
+    private func findOuterScrollView() -> NSScrollView? {
+        var current: NSView? = self
+        while let view = current {
+            if let scrollView = view as? NSScrollView {
+                let isWebKitInternal = scrollView.isOrHasAncestor(ofType: WKWebView.self)
+                let isChromiumInternal = scrollView.isOrHasAncestor(named: "ChromiumBrowserView")
+                if !isWebKitInternal && !isChromiumInternal {
+                    return scrollView
+                }
+            }
+            current = view.superview
+        }
+        return nil
+    }
+
+    /// Returns true if this view or any ancestor matches the class name.
+    private func isOrHasAncestor(named className: String) -> Bool {
+        var current: NSView? = self
+        while let view = current {
+            if String(describing: type(of: view)) == className { return true }
+            current = view.superview
+        }
+        return false
     }
 
     /// Returns `true` if this view itself, or any ancestor (superview),

@@ -22,7 +22,9 @@ import { fullscreen } from "./commands/fullscreen.ts";
 import { minimize } from "./commands/minimize.ts";
 import { zoom } from "./commands/zoom.ts";
 import { setColor } from "./commands/set-color.ts";
+import { centerPane } from "./commands/center-pane.ts";
 
+const CLI_VERSION = "0.1.0";
 const args = process.argv.slice(2);
 
 function printUsage() {
@@ -43,6 +45,7 @@ Commands:
   collapse        Collapse the focused pane
   expand          Expand the focused pane
   fit             Fit all panes to the window
+  center pane     Scroll the focused pane to the center of the window
 
   back            Browser: go back
   forward         Browser: go forward
@@ -58,6 +61,7 @@ Commands:
 
 Options:
   --help, -h      Show this help message
+  --version, -v   Show the CLI version
 
 Environment:
   WATCHTOWER_PANE_ID   Automatically set by Watchtower in each terminal.
@@ -70,6 +74,11 @@ if (
   (args.length === 1 && (args[0] === "--help" || args[0] === "-h"))
 ) {
   printUsage();
+  process.exit(0);
+}
+
+if (args.length === 1 && (args[0] === "--version" || args[0] === "-v")) {
+  console.log(`watchtower v${CLI_VERSION}`);
   process.exit(0);
 }
 
@@ -101,6 +110,7 @@ const twoWordCommands: Record<string, (args: string[]) => Promise<void>> = {
   "move right": moveRight,
   "switch engine": switchEngine,
   "set color": setColor,
+  "center pane": centerPane,
 };
 
 const firstArg = args[0];

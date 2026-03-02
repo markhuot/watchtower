@@ -97,6 +97,10 @@ struct WatchtowerApp: App {
                     activeViewModel?.fitPanesToWindow()
                 }
 
+                Button("Center Pane") {
+                    activeViewModel?.centerPane()
+                }
+
                 Button("Collapse Pane") {
                     activeViewModel?.collapsePane()
                 }
