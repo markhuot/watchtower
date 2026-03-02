@@ -200,6 +200,17 @@ func findFocusedBrowserModel(in view: NSView) -> BrowserPaneModel? {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var browserShortcutMonitor: Any?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Apply dark appearance before first window presentation to avoid
+        // transient light titlebar/chrome during launch.
+        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+
+        // Configure any windows that already exist this early in launch.
+        for window in NSApp.windows {
+            configureWindow(window)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize the history store early so pruning runs at startup.
         _ = HistoryStore.shared
@@ -218,11 +229,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: Notification.Name("WatchtowerTerminateAttempted"),
             object: nil
         )
-
-        // Set dark appearance at the app level so all windows (including
-        // the titlebar chrome, traffic lights, and title text) render
-        // correctly against the dark terminal background.
-        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
 
         // Configure all existing windows immediately and set ourselves as delegate
         for window in NSApp.windows {
@@ -365,8 +371,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureWindow(_ window: NSWindow) {
         window.title = "Watchtower"
         window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = true
+        window.titlebarAppearsTransparent = false
         window.isMovableByWindowBackground = false
+        window.isOpaque = true
         if #available(macOS 11.0, *) {
             window.titlebarSeparatorStyle = .none
         }
