@@ -281,6 +281,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return nil
             }
 
+                if self.isBrowserBackShortcut(event),
+                    let browser = browser {
+                     shortcutLogger.debug("Handling browser back shortcut")
+                     browser.goBack()
+                     return nil
+                }
+
+                if self.isBrowserForwardShortcut(event),
+                    let browser = browser {
+                     shortcutLogger.debug("Handling browser forward shortcut")
+                     browser.goForward()
+                     return nil
+                }
+
             if self.isBrowserInspectorShortcut(event),
                let browser = browser {
                 shortcutLogger.debug("Handling browser inspector shortcut")
@@ -350,6 +364,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard flags == [.command] else { return false }
         guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
         return chars == "r"
+    }
+
+    private func isBrowserBackShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock])
+
+        guard flags == [.command] else { return false }
+        guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        return chars == "["
+    }
+
+    private func isBrowserForwardShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock])
+
+        guard flags == [.command] else { return false }
+        guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        return chars == "]"
     }
 
     private func isBrowserInspectorShortcut(_ event: NSEvent) -> Bool {
