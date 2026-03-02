@@ -38,7 +38,7 @@ protocol BrowserEngineView: NSView {
 /// letting them propagate up the responder chain to the menu system.
 func isWatchtowerAppShortcut(_ event: NSEvent) -> Bool {
     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    guard let chars = event.charactersIgnoringModifiers else { return false }
+    guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
 
     switch (flags, chars) {
     // Pane management

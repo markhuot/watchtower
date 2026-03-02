@@ -170,6 +170,8 @@ func findBrowserEngineView(for paneId: UUID, in view: NSView) -> (any BrowserEng
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    private var browserShortcutMonitor: Any?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize the history store early so pruning runs at startup.
         _ = HistoryStore.shared
@@ -216,6 +218,72 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 object: nil
             )
         }
+
+        // Ensure app-level shortcuts (e.g. Cmd+R) are handled by the menu
+        // system even when first responder is an internal browser subview
+        // (WKContentView / CEF child views) that bypasses wrapper overrides.
+        browserShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard isWatchtowerAppShortcut(event) else { return event }
+
+            let window = event.window ?? NSApp.keyWindow
+            guard self.firstResponderIsInsideBrowserView(window: window) else {
+                return event
+            }
+
+            // Make Cmd+R deterministic for browser panes even when SwiftUI
+            // focusedSceneValue state is temporarily stale.
+            if self.isBrowserReloadShortcut(event),
+               let browser = self.browserModelFromFirstResponder(window: window) {
+                browser.reloadOrStop()
+                return nil
+            }
+
+            if NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
+                return nil
+            }
+            return event
+        }
+    }
+
+    private func firstResponderIsInsideBrowserView(window: NSWindow?) -> Bool {
+        guard let responder = window?.firstResponder as? NSView else { return false }
+
+        var current: NSView? = responder
+        while let view = current {
+            if view is WatchtowerWebView || view is ChromiumBrowserView {
+                return true
+            }
+            current = view.superview
+        }
+
+        return false
+    }
+
+    private func browserModelFromFirstResponder(window: NSWindow?) -> BrowserPaneModel? {
+        guard let responder = window?.firstResponder as? NSView else { return nil }
+
+        var current: NSView? = responder
+        while let view = current {
+            if let webView = view as? WatchtowerWebView {
+                return webView.browser
+            }
+            if let chromiumView = view as? ChromiumBrowserView {
+                return chromiumView.browser
+            }
+            current = view.superview
+        }
+
+        return nil
+    }
+
+    private func isBrowserReloadShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock])
+
+        guard flags == [.command] else { return false }
+        guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        return chars == "r"
     }
 
     @objc func windowNeedsConfiguration(_ notification: Notification) {
@@ -314,6 +382,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - App Quit Confirmation
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let monitor = browserShortcutMonitor {
+            NSEvent.removeMonitor(monitor)
+            browserShortcutMonitor = nil
+        }
         IPCServer.shared.stop()
         // Cleanly shut down CEF (invalidate pump timer, call cef_shutdown).
         ChromiumManager.shared.shutdown()
