@@ -1,6 +1,6 @@
 # Watchtower
 
-<video src="resources/screencast.mp4" controls></video>
+https://github.com/markhuot/watchtower/blob/1d79f56a6f03e02454bb9fec17e2751fa50575ab/resources/screencast.mp4
 
 A macOS terminal app for AI-assisted development workflows. Multiple 80-column terminals in a horizontally scrolling layout, powered by [Ghostty](https://github.com/ghostty-org/ghostty).
 
