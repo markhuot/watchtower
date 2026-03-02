@@ -1,6 +1,8 @@
 import SwiftUI
 import os
 
+private let shortcutLogger = Logger(subsystem: "com.watchtower", category: "ShortcutRouting")
+
 struct WatchtowerApp: App {
     // Initialize Ghostty at app launch
     @StateObject private var ghosttyManager = GhosttyAppManager.shared
@@ -139,6 +141,12 @@ struct WatchtowerApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command])
                 .disabled(!isBrowserFocused)
+
+                Button("Open Web Inspector") {
+                    activeViewModel?.openWebInspector()
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .disabled(!isBrowserFocused)
             }
         }
 
@@ -163,6 +171,26 @@ func findBrowserEngineView(for paneId: UUID, in view: NSView) -> (any BrowserEng
     }
     for subview in view.subviews {
         if let found = findBrowserEngineView(for: paneId, in: subview) {
+            return found
+        }
+    }
+    return nil
+}
+
+/// Find the currently focused browser model by walking a view hierarchy.
+func findFocusedBrowserModel(in view: NSView) -> BrowserPaneModel? {
+    if let webView = view as? WatchtowerWebView,
+       let browser = webView.browser,
+       browser.isFocused {
+        return browser
+    }
+    if let chromiumView = view as? ChromiumBrowserView,
+       let browser = chromiumView.browser,
+       browser.isFocused {
+        return browser
+    }
+    for subview in view.subviews {
+        if let found = findFocusedBrowserModel(in: subview) {
             return found
         }
     }
@@ -226,37 +254,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard isWatchtowerAppShortcut(event) else { return event }
 
             let window = event.window ?? NSApp.keyWindow
-            guard self.firstResponderIsInsideBrowserView(window: window) else {
-                return event
+            let browser = self.browserModelFromFirstResponder(window: window)
+                ?? self.focusedBrowserModelInAppWindows()
+
+            shortcutLogger.debug(
+                "Shortcut event chars=\(event.charactersIgnoringModifiers ?? "?", privacy: .public) flags=\(event.modifierFlags.rawValue) keyWindow=\(self.describeWindow(NSApp.keyWindow), privacy: .public) eventWindow=\(self.describeWindow(window), privacy: .public) firstResponder=\(self.describeResponder(window?.firstResponder), privacy: .public) browserResolved=\(browser != nil)"
+            )
+            if let browser {
+                shortcutLogger.debug(
+                    "Resolved browser id=\(browser.id.uuidString, privacy: .public) engine=\(browser.engine.displayName, privacy: .public) isFocused=\(browser.isFocused)"
+                )
             }
 
             // Make Cmd+R deterministic for browser panes even when SwiftUI
             // focusedSceneValue state is temporarily stale.
             if self.isBrowserReloadShortcut(event),
-               let browser = self.browserModelFromFirstResponder(window: window) {
+               let browser = browser {
+                shortcutLogger.debug("Handling browser reload shortcut")
                 browser.reloadOrStop()
                 return nil
             }
 
-            if NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
+            if self.isBrowserInspectorShortcut(event),
+               let browser = browser {
+                shortcutLogger.debug("Handling browser inspector shortcut")
+                browser.openWebInspector()
+                return nil
+            }
+
+            let menuHandled = NSApp.mainMenu?.performKeyEquivalent(with: event) == true
+            shortcutLogger.debug("Main menu performKeyEquivalent handled=\(menuHandled)")
+            if menuHandled {
                 return nil
             }
             return event
         }
     }
 
-    private func firstResponderIsInsideBrowserView(window: NSWindow?) -> Bool {
-        guard let responder = window?.firstResponder as? NSView else { return false }
-
-        var current: NSView? = responder
-        while let view = current {
-            if view is WatchtowerWebView || view is ChromiumBrowserView {
-                return true
+    private func focusedBrowserModelInAppWindows() -> BrowserPaneModel? {
+        for window in NSApp.windows {
+            guard let contentView = window.contentView else { continue }
+            if let browser = findFocusedBrowserModel(in: contentView) {
+                shortcutLogger.debug(
+                    "Focused browser found in app windows id=\(browser.id.uuidString, privacy: .public) window=\(self.describeWindow(window), privacy: .public)"
+                )
+                return browser
             }
-            current = view.superview
         }
-
-        return false
+        shortcutLogger.debug("No focused browser found in app windows")
+        return nil
     }
 
     private func browserModelFromFirstResponder(window: NSWindow?) -> BrowserPaneModel? {
@@ -265,15 +311,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var current: NSView? = responder
         while let view = current {
             if let webView = view as? WatchtowerWebView {
+                shortcutLogger.debug("Resolved browser from first responder via WebKit")
                 return webView.browser
             }
             if let chromiumView = view as? ChromiumBrowserView {
+                shortcutLogger.debug("Resolved browser from first responder via Chromium")
                 return chromiumView.browser
             }
             current = view.superview
         }
 
         return nil
+    }
+
+    private func describeWindow(_ window: NSWindow?) -> String {
+        guard let window else { return "nil" }
+        let className = String(describing: type(of: window))
+        let title = window.title.isEmpty ? "<untitled>" : window.title
+        return "\(className){title=\(title)}"
+    }
+
+    private func describeResponder(_ responder: NSResponder?) -> String {
+        guard let responder else { return "nil" }
+        return String(describing: type(of: responder))
     }
 
     private func isBrowserReloadShortcut(_ event: NSEvent) -> Bool {
@@ -284,6 +344,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard flags == [.command] else { return false }
         guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
         return chars == "r"
+    }
+
+    private func isBrowserInspectorShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock])
+
+        guard flags == [.command, .option] else { return false }
+        guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        return chars == "i"
     }
 
     @objc func windowNeedsConfiguration(_ notification: Notification) {

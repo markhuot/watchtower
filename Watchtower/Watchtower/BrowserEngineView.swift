@@ -71,7 +71,7 @@ func isWatchtowerAppShortcut(_ event: NSEvent) -> Bool {
     case ([.command], "["):                return true  // Go Back
     case ([.command], "]"):                return true  // Go Forward
     case ([.command], "r"):                return true  // Reload Page
-    case ([.command, .shift], "i"):        return true  // Open Web Inspector
+    case ([.command, .option], "i"):       return true  // Open Web Inspector
 
     default: return false
     }

@@ -329,6 +329,11 @@ struct CommandPaletteView: View {
                     browser.reloadOrStop()
                 }
             })
+            items.append(.builtIn(name: "Open Web Inspector", shortcut: "\u{2318}\u{2325}I") { vm in
+                if let browser = vm.contextualPane as? BrowserPaneModel {
+                    browser.openWebInspector()
+                }
+            })
 
             // Engine switching — show option to switch to the OTHER engine
             if let browser = viewModel.contextualPane as? BrowserPaneModel {

@@ -1346,6 +1346,23 @@ class PaneContainerViewModel: ObservableObject {
         }
     }
 
+    /// Open the web inspector for the focused browser pane.
+    func openWebInspector() {
+        guard let browser = contextualPane as? BrowserPaneModel else { return }
+        let paneId = browser.id
+        browser.openWebInspector()
+
+        // Opening inspector can steal first responder (especially WebKit).
+        // Re-assert focus so pane-scoped shortcuts (Cmd+Shift+P, Cmd+L, etc.)
+        // continue to work without an extra click.
+        DispatchQueue.main.async { [weak self] in
+            self?.focusPaneById(paneId)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            self?.focusPaneById(paneId)
+        }
+    }
+
     /// Dismiss the command palette. If no `focusPane` call was made since
     /// `beforeGeneration` was captured, focus is restored to the pane that
     /// had the palette. If an action called `focusPane()` (bumping the

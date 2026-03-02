@@ -93,12 +93,29 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
     }
 
     func openWebInspector() {
-        // WKWebView doesn't expose a stable public API to programmatically open
-        // the inspector window. Try known WebKit selectors used by AppKit menu
-        // plumbing and gracefully no-op if unavailable.
+        if let window = window {
+            _ = window.makeFirstResponder(self)
+        }
+
+        // Preferred route on modern WebKit: ask the private inspector proxy
+        // object to show itself (`_inspector.show`).
+        let inspectorSelector = NSSelectorFromString("_inspector")
+        if responds(to: inspectorSelector),
+           let inspector = perform(inspectorSelector)?.takeUnretainedValue() as AnyObject? {
+            let showSelector = NSSelectorFromString("show")
+            if inspector.responds(to: showSelector) {
+                _ = inspector.perform(showSelector)
+                return
+            }
+        }
+
+        // Fallback: try known WebKit/AppKit selector variants on the view.
         let selectors = [
+            NSSelectorFromString("_showWebInspector"),
             NSSelectorFromString("_showWebInspector:"),
+            NSSelectorFromString("showWebInspector"),
             NSSelectorFromString("showWebInspector:"),
+            NSSelectorFromString("_inspectElement"),
             NSSelectorFromString("_inspectElement:")
         ]
 
@@ -107,13 +124,17 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
             return
         }
 
+        // Final fallback: route through AppKit action dispatch.
         for selector in selectors {
+            if NSApp.sendAction(selector, to: nil, from: nil) {
+                return
+            }
             if NSApp.sendAction(selector, to: nil, from: self) {
                 return
             }
         }
 
-        logger.debug("Web inspector selector not available for WKWebView")
+        logger.error("Failed to open WebKit web inspector: no compatible selector path found")
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -122,6 +143,9 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
         let result = super.becomeFirstResponder()
         if result {
             browser?.isFocused = true
+            logger.debug(
+                "becomeFirstResponder paneId=\(self.browser?.id.uuidString ?? "nil", privacy: .public) keyWindow=\(NSApp.keyWindow?.title ?? "nil", privacy: .public)"
+            )
 
             // Notify the view model so focusModePaneId is updated (which
             // drives the focus-mode width expansion). Without this, direct
@@ -141,11 +165,70 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
     }
 
     override func resignFirstResponder() -> Bool {
+        let wasFocused = browser?.isFocused ?? false
         let result = super.resignFirstResponder()
         if result {
-            browser?.isFocused = false
+            // If focus was already cleared by an explicit pane-focus change,
+            // don't override that state here.
+            guard wasFocused else {
+                logger.debug(
+                    "resignFirstResponder paneId=\(self.browser?.id.uuidString ?? "nil", privacy: .public) skipped focus update (already unfocused)"
+                )
+                return result
+            }
+
+            let preserveFocus = shouldPreserveFocusOnResign()
+            logger.debug(
+                "resignFirstResponder paneId=\(self.browser?.id.uuidString ?? "nil", privacy: .public) preserveFocus=\(preserveFocus) keyWindow=\(NSApp.keyWindow?.title ?? "nil", privacy: .public) firstResponder=\(String(describing: type(of: self.window?.firstResponder as Any)), privacy: .public)"
+            )
+            browser?.isFocused = preserveFocus
         }
         return result
+    }
+
+    private func shouldPreserveFocusOnResign() -> Bool {
+        // Best signal: Web Inspector is currently key.
+        if webInspectorLikelyHasFocus() {
+            return true
+        }
+
+        // During inspector handoff, AppKit often swaps first responder to
+        // KeyViewProxy while keeping the same key window title.
+        if let responder = window?.firstResponder {
+            let responderType = String(describing: type(of: responder))
+            if responderType == "KeyViewProxy" {
+                return true
+            }
+        }
+
+        // If no other pane is focused yet, keep this one focused so
+        // app-level shortcuts continue to route through the pane context.
+        guard let browser = browser, let vm = browser.viewModel else {
+            return true
+        }
+        let anotherPaneFocused = vm.panes.contains { pane in
+            pane.id != browser.id && pane.isFocused
+        }
+        return !anotherPaneFocused
+    }
+
+    private func webInspectorLikelyHasFocus() -> Bool {
+        guard let keyWindow = NSApp.keyWindow else { return false }
+
+        logger.debug(
+            "webInspectorLikelyHasFocus keyWindowClass=\(String(describing: type(of: keyWindow)), privacy: .public) title=\(keyWindow.title, privacy: .public)"
+        )
+
+        if keyWindow.title.localizedCaseInsensitiveContains("web inspector") {
+            return true
+        }
+
+        let className = String(describing: type(of: keyWindow)).lowercased()
+        if className.contains("inspector") || className.contains("web") {
+            return true
+        }
+
+        return false
     }
 
     override func viewDidMoveToWindow() {
