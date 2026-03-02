@@ -204,6 +204,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // SwiftUI windows are configured as soon as they appear.
         for name in [
             NSWindow.didBecomeKeyNotification,
+            NSWindow.didBecomeMainNotification,
+            NSWindow.willEnterFullScreenNotification,
+            NSWindow.didEnterFullScreenNotification,
+            NSWindow.didExitFullScreenNotification,
         ] {
             NotificationCenter.default.addObserver(
                 self,
@@ -223,12 +227,68 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureWindow(_ window: NSWindow) {
         window.title = "Watchtower"
         window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = false
+        window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = false
+        if #available(macOS 11.0, *) {
+            window.titlebarSeparatorStyle = .none
+        }
+        window.toolbar?.showsBaselineSeparator = false
         // Match the window background to the Ghostty terminal background.
         // Keep a native, opaque titlebar so there is no initial white flash.
         let bgColor = GhosttyAppManager.shared.backgroundColor
-        window.backgroundColor = NSColor(bgColor)
+        let nsColor = NSColor(bgColor)
+        window.backgroundColor = nsColor
+
+        // In native full screen macOS may move titlebar chrome into
+        // a separate private window. Apply the same color there too.
+        styleTitlebarContainer(for: window, color: nsColor)
+
+        // AppKit can lazily create titlebar subviews after initial window
+        // configuration; apply once more on the next run loop so the color
+        // stays exact and separators/materials remain hidden.
+        DispatchQueue.main.async { [weak window] in
+            guard let window else { return }
+            self.styleTitlebarContainer(for: window, color: nsColor)
+            if #available(macOS 11.0, *) {
+                window.titlebarSeparatorStyle = .none
+            }
+            window.toolbar?.showsBaselineSeparator = false
+        }
+    }
+
+    /// Finds the titlebar container for the given window (normal or fullscreen)
+    /// and applies the background color to its layer.
+    private func styleTitlebarContainer(for window: NSWindow, color: NSColor) {
+        if let container = titlebarContainer(for: window) {
+            container.wantsLayer = true
+            container.layer?.backgroundColor = color.cgColor
+
+            if let bgView = container.firstDescendant(withClassName: "NSTitlebarBackgroundView") {
+                bgView.isHidden = true
+            }
+
+            if let effectView = container.firstDescendant(withClassName: "NSVisualEffectView") {
+                effectView.isHidden = true
+            }
+        }
+    }
+
+    /// In normal mode, the titlebar container is in the window's own hierarchy.
+    /// In native fullscreen, macOS moves it into a private child window.
+    private func titlebarContainer(for window: NSWindow) -> NSView? {
+        if !window.styleMask.contains(.fullScreen) {
+            return window.contentView?
+                .firstViewFromRoot(withClassName: "NSTitlebarContainerView")
+        }
+
+        for candidate in NSApplication.shared.windows {
+            guard type(of: candidate).description() == "NSToolbarFullScreenWindow" else { continue }
+            guard candidate.parent == window else { continue }
+            return candidate.contentView?
+                .firstViewFromRoot(withClassName: "NSTitlebarContainerView")
+        }
+
+        return nil
     }
 
     // MARK: - Dock Menu
