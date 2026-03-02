@@ -199,14 +199,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             configureWindow(window)
         }
 
-        // Observe future window creation
-        // Re-apply window configuration on key window changes and full screen transitions,
-        // because macOS resets the window backgroundColor during the transition.
+        // Observe future window activation.
+        // Re-apply window configuration when a window becomes key so late-created
+        // SwiftUI windows are configured as soon as they appear.
         for name in [
             NSWindow.didBecomeKeyNotification,
-            NSWindow.willEnterFullScreenNotification,
-            NSWindow.didEnterFullScreenNotification,
-            NSWindow.didExitFullScreenNotification,
         ] {
             NotificationCenter.default.addObserver(
                 self,
@@ -226,61 +223,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureWindow(_ window: NSWindow) {
         window.title = "Watchtower"
         window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = true
+        window.titlebarAppearsTransparent = false
         window.isMovableByWindowBackground = false
-        // Match the window background to the Ghostty terminal background
-        // so the titlebar blends seamlessly
+        // Match the window background to the Ghostty terminal background.
+        // Keep a native, opaque titlebar so there is no initial white flash.
         let bgColor = GhosttyAppManager.shared.backgroundColor
         window.backgroundColor = NSColor(bgColor)
-
-        // In native full screen the titlebar lives in a separate private
-        // NSToolbarFullScreenWindow. Setting window.backgroundColor alone
-        // won't color it — we must find the NSTitlebarContainerView and
-        // set its layer background directly.
-        styleTitlebarContainer(for: window, color: NSColor(bgColor))
-    }
-
-    /// Finds the NSTitlebarContainerView for the given window (handling both
-    /// normal and fullscreen modes) and applies the background color to its layer.
-    /// Also hides internal views (NSTitlebarBackgroundView, NSVisualEffectView)
-    /// that composite their own colors on top.
-    private func styleTitlebarContainer(for window: NSWindow, color: NSColor) {
-        if let container = titlebarContainer(for: window) {
-            container.wantsLayer = true
-            container.layer?.backgroundColor = color.cgColor
-
-            // macOS places a NSTitlebarBackgroundView inside the container that
-            // forces its own opaque background on top of our layer color.
-            if let bgView = container.firstDescendant(withClassName: "NSTitlebarBackgroundView") {
-                bgView.isHidden = true
-            }
-
-            // On macOS 13–15 an NSVisualEffectView composites a translucent
-            // material on top — hide it so our background color shows through.
-            if let effectView = container.firstDescendant(withClassName: "NSVisualEffectView") {
-                effectView.isHidden = true
-            }
-        }
-    }
-
-    /// In normal mode, the titlebar container is part of the window's own view
-    /// hierarchy. In native fullscreen, macOS moves it into a separate private
-    /// `NSToolbarFullScreenWindow` that is a child of the main window.
-    private func titlebarContainer(for window: NSWindow) -> NSView? {
-        if !window.styleMask.contains(.fullScreen) {
-            return window.contentView?
-                .firstViewFromRoot(withClassName: "NSTitlebarContainerView")
-        }
-
-        // In fullscreen, search for the private toolbar window parented to ours
-        for candidate in NSApplication.shared.windows {
-            guard type(of: candidate).description() == "NSToolbarFullScreenWindow" else { continue }
-            guard candidate.parent == window else { continue }
-            return candidate.contentView?
-                .firstViewFromRoot(withClassName: "NSTitlebarContainerView")
-        }
-
-        return nil
     }
 
     // MARK: - Dock Menu
