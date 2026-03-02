@@ -5,6 +5,7 @@ struct PaneView: View {
     @ObservedObject var pane: PaneModel
     @ObservedObject var viewModel: PaneContainerViewModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
+    let fixedContentWidth: CGFloat?
 
     /// Per-window active state. `.key` means this window is the key window,
     /// `.active` means it's active but not key, `.inactive` means background.
@@ -213,6 +214,7 @@ struct PaneView: View {
                     .transition(.opacity)
             }
         }
+            .frame(width: fixedContentWidth, alignment: .leading)
         .background(appManager.backgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .overlay(
@@ -455,7 +457,8 @@ struct PaneView_Previews: PreviewProvider {
                 status: .active,
                 directory: "/Users/username/projects"
             ),
-            viewModel: PaneContainerViewModel()
+            viewModel: PaneContainerViewModel(),
+            fixedContentWidth: nil
         )
         .frame(width: 760, height: 600)
     }

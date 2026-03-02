@@ -359,11 +359,11 @@ struct FocusModeWrapper<Content: View>: View {
             )
             .compositingGroup()
             .opacity(pane.isClosing ? 0 : (pane.isAppearing ? 0 : 1))
+            .animation(.easeIn(duration: min(0.12, pane.animationDuration * 0.45)), value: pane.isClosing)
             .offset(
-                x: pane.isAppearing ? 50 : 0,
-                y: pane.isClosing ? 20 : 0
+                x: pane.isAppearing ? 50 : (pane.isClosing ? -20 : 0),
+                y: 0
             )
-            .animation(.easeIn(duration: pane.animationDuration), value: pane.isClosing)
             .animation(.easeOut(duration: pane.animationDuration), value: pane.isAppearing)
     }
 
@@ -383,6 +383,7 @@ struct PaneWithHandle: View {
     let allPanes: [PaneModel]
     @ObservedObject var viewModel: PaneContainerViewModel
     let windowWidth: CGFloat
+    @State private var closingFrozenContentWidth: CGFloat? = nil
 
     /// The absolute X position of the mouse in window coordinates when the drag started,
     /// along with the pane width at that moment. Using absolute coordinates avoids the
@@ -400,7 +401,7 @@ struct PaneWithHandle: View {
     /// When collapsed, the pane shrinks to a narrow strip.
     /// When this pane is the focus-mode target the pane content itself
     /// expands to the focus-mode minimum (which varies by pane type).
-    private var effectiveWidth: CGFloat {
+    private var baseWidth: CGFloat {
         if pane.isCollapsed {
             return PaneModel.collapsedPaneWidth
         }
@@ -409,6 +410,10 @@ struct PaneWithHandle: View {
             return max(pane.paneWidth, pane.focusModeMinWidth(windowWidth: windowWidth))
         }
         return pane.paneWidth
+    }
+
+    private var effectiveWidth: CGFloat {
+        pane.isClosing ? 0 : baseWidth
     }
 
     /// Standard gap width between panes (3px indicator + 12px padding each side).
@@ -427,6 +432,9 @@ struct PaneWithHandle: View {
     /// to reduce visual clutter. During a drag reorder the gaps expand back
     /// to full width so drop targets are easy to hit.
     private var rightGapWidth: CGFloat {
+        if pane.isClosing {
+            return 0
+        }
         let isDragging = viewModel.draggedPaneId != nil
         if !isDragging,
            pane.isCollapsed,
@@ -483,7 +491,7 @@ struct PaneWithHandle: View {
                 DropIndicatorView(isActive: showLeftIndicator, targetSlot: 0, viewModel: viewModel)
             }
 
-            PaneView(pane: pane, viewModel: viewModel, onClose: {
+            PaneView(pane: pane, viewModel: viewModel, fixedContentWidth: closingFrozenContentWidth, onClose: {
                     viewModel.removePane(byId: pane.id)
                 }, onDragStarted: {
                     viewModel.dragStarted(paneId: pane.id)
@@ -502,6 +510,7 @@ struct PaneWithHandle: View {
                 .frame(width: effectiveWidth)
                 .animation(nil, value: pane.paneWidth)
                 .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
+                .animation(.easeIn(duration: pane.animationDuration), value: pane.isClosing)
                 .onDrop(of: [.text, .url, .fileURL, weblocUTType], delegate: PaneSplitDropDelegate(
                     paneIndex: index,
                     paneWidth: pane.paneWidth,
@@ -570,7 +579,14 @@ struct PaneWithHandle: View {
                     )
             }
             .frame(width: rightGapWidth)
-            .animation(.easeInOut(duration: 0.2), value: rightGapWidth)
+            .animation(.easeInOut(duration: pane.isClosing ? pane.animationDuration : 0.2), value: rightGapWidth)
+        }
+        .onChange(of: pane.isClosing) { isClosing in
+            if isClosing {
+                closingFrozenContentWidth = baseWidth
+            } else {
+                closingFrozenContentWidth = nil
+            }
         }
     }
 }
@@ -1896,7 +1912,9 @@ class PaneContainerViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
             guard let self = self else { return }
             guard let removeIndex = self.panes.firstIndex(where: { $0.id == id }) else { return }
-            self.panes.remove(at: removeIndex)
+            withAnimation(.easeInOut(duration: duration)) {
+                self.panes.remove(at: removeIndex)
+            }
         }
     }
 
@@ -1913,6 +1931,8 @@ class PaneContainerViewModel: ObservableObject {
             return
         }
 
+        let duration = panes[index].animationDuration
+
         // Exit focus mode if the removed pane was the focus-mode target
         if id == focusModePaneId {
             exitFocusMode()
@@ -1927,11 +1947,15 @@ class PaneContainerViewModel: ObservableObject {
             let focusIndex = index > 0 ? index - 1 : 1
             let neighborId = panes[focusIndex].id
             NSLog("[CEF-CLOSE] finishRemovingCEFPane: removing pane at index %d, focusing %@", index, neighborId.uuidString)
-            panes.remove(at: index)
+            withAnimation(.easeInOut(duration: duration)) {
+                panes.remove(at: index)
+            }
             focusPaneById(neighborId)
         } else {
             NSLog("[CEF-CLOSE] finishRemovingCEFPane: removing last pane at index %d", index)
-            panes.remove(at: index)
+            withAnimation(.easeInOut(duration: duration)) {
+                panes.remove(at: index)
+            }
         }
         NSLog("[CEF-CLOSE] finishRemovingCEFPane: done, panes.count=%d", panes.count)
     }
