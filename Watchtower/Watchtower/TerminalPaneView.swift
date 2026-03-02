@@ -23,7 +23,7 @@ struct PaneView: View {
 
     /// Called when the title bar is double-clicked (to expand a collapsed pane).
     var onHeaderDoubleTapped: (() -> Void)? = nil
-    
+
     private let cornerRadius: CGFloat = 6
 
     /// Whether this window is the key (frontmost) window.
@@ -94,7 +94,7 @@ struct PaneView: View {
             return Color.clear
         }
     }
-    
+
     var body: some View {
         ZStack(alignment: .top) {
             // Normal pane content — always in the hierarchy so terminals
@@ -109,10 +109,11 @@ struct PaneView: View {
                             DragSourceView(
                                 pane: pane,
                                 onDragStarted: onDragStarted,
-                                onClicked: onHeaderTapped
+                                onClicked: onHeaderTapped,
+                                onDoubleClicked: onHeaderDoubleTapped
                             )
                         )
-                    
+
                     // Status circle sits above the drag overlay so hover/click works
                     StatusCircle(status: pane.status, onClose: onClose)
                         .padding(.leading, 12)
@@ -152,7 +153,7 @@ struct PaneView: View {
                     }
                 }
                 .frame(height: 44)
-                
+
                 // Content area — switches on pane type
                 if let terminal = pane as? TerminalPaneModel {
                     GeometryReader { geo in
@@ -305,7 +306,7 @@ struct PaneHeaderView: View {
                 // so that hover/click events reach it.
                 Color.clear
                     .frame(width: 16, height: 16)
-                
+
                 // Reserve space for back/reload/forward buttons on browser panes.
                 // The actual buttons are rendered above the drag overlay in PaneView
                 // so that click events reach them.
@@ -320,7 +321,7 @@ struct PaneHeaderView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(appManager.headerTextColor.opacity(0.9))
                     .lineLimit(1)
-                
+
                 Spacer()
 
                 // Subtitle (directory/branch for terminals, host for browsers)
