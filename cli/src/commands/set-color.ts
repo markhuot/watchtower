@@ -3,18 +3,20 @@ import { sendCommand, getPaneId } from "../ipc.ts";
 function printUsage() {
   console.log(`Usage: watchtower set color [options] [color]
 
-Set the header color of the current pane.
+Set the header color of a pane.
 
 Arguments:
   color                     Hex color (#RGB, #RRGGBB, RGB, or RRGGBB).
                             Omit to reset to the default theme color.
 
 Options:
+  --pane <id>              Target pane ID (defaults to WATCHTOWER_PANE_ID)
   --reset                   Reset to the default theme color
   --help, -h                Show this help message
 
 Examples:
   watchtower set color #ff0000
+  watchtower set color --pane <pane-id> #ff0000
   watchtower set color 00ff00
   watchtower set color f0f
   watchtower set color --reset`);
@@ -28,8 +30,23 @@ export async function setColor(args: string[]) {
 
   const reset = args.includes("--reset");
   let color: string | undefined;
+  let paneId: string | undefined;
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const next = args[i + 1];
+
+    if (arg === "--pane") {
+      if (!next) {
+        console.error("Missing value for --pane");
+        printUsage();
+        process.exit(1);
+      }
+      paneId = next;
+      i++;
+      continue;
+    }
+
     if (arg === "--reset") continue;
     if (arg.startsWith("-")) {
       console.error(`Unknown option: ${arg}`);
@@ -40,10 +57,17 @@ export async function setColor(args: string[]) {
     }
   }
 
+  paneId = paneId ?? getPaneId();
+  if (!paneId) {
+    console.error("No pane context found.");
+    console.error("Run from inside a Watchtower pane or provide --pane <id>.");
+    process.exit(1);
+  }
+
   // Build the command payload
   const payload: Record<string, unknown> = {
     command: "set-pane-color",
-    paneId: getPaneId(),
+    paneId,
   };
 
   if (reset || !color) {

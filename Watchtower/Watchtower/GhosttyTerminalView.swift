@@ -198,6 +198,20 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         var mergedEnv = terminal.env ?? [:]
         mergedEnv["WATCHTOWER_PANE_ID"] = terminal.id.uuidString
 
+        // Prepend the app-bundled CLI directory to PATH so `watchtower`
+        // works inside panes without requiring a global install.
+        if let bundledCLIPath = CLIInstaller.bundledBinaryPath?.path {
+            let bundledCLIDir = (bundledCLIPath as NSString).deletingLastPathComponent
+            let existingPath = mergedEnv["PATH"]
+                ?? ProcessInfo.processInfo.environment["PATH"]
+                ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+
+            let pathEntries = existingPath.split(separator: ":").map(String.init)
+            if !pathEntries.contains(bundledCLIDir) {
+                mergedEnv["PATH"] = "\(bundledCLIDir):\(existingPath)"
+            }
+        }
+
         for (key, value) in mergedEnv {
             let cKey = strdup(key)!
             let cVal = strdup(value)!

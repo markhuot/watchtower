@@ -22,7 +22,9 @@ import { fullscreen } from "./commands/fullscreen.ts";
 import { minimize } from "./commands/minimize.ts";
 import { zoom } from "./commands/zoom.ts";
 import { setColor } from "./commands/set-color.ts";
+import { setStatus } from "./commands/set-status.ts";
 import { centerPane } from "./commands/center-pane.ts";
+import { installOpencode } from "./commands/install-opencode.ts";
 
 const CLI_VERSION = "0.1.0";
 const args = process.argv.slice(2);
@@ -58,6 +60,8 @@ Commands:
   minimize        Minimize the window
   zoom            Zoom the window
   set color       Set the pane header color (hex or --reset)
+  set status      Set the pane status (active|idle|failed)
+  install opencode  Install Watchtower plugin for OpenCode
 
 Options:
   --help, -h      Show this help message
@@ -110,7 +114,9 @@ const twoWordCommands: Record<string, (args: string[]) => Promise<void>> = {
   "move right": moveRight,
   "switch engine": switchEngine,
   "set color": setColor,
+  "set status": setStatus,
   "center pane": centerPane,
+  "install opencode": installOpencode,
 };
 
 const firstArg = args[0];

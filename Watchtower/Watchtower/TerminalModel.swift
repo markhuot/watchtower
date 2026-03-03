@@ -1,6 +1,11 @@
 import Foundation
 import Combine
 
+struct PaneToast: Equatable {
+    let title: String
+    let message: String?
+}
+
 class TerminalPaneModel: PaneModel {
     @Published var terminalTitle: String
     @Published var terminalStatus: PaneStatus
@@ -31,6 +36,12 @@ class TerminalPaneModel: PaneModel {
 
     /// Auto-clear timer for progress reports (15 second timeout).
     private var progressClearTimer: Timer? = nil
+
+    /// The currently visible in-pane toast notification.
+    @Published var toast: PaneToast? = nil
+
+    /// Auto-clear timer for pane toasts.
+    private var toastClearTimer: Timer? = nil
 
     /// Timer that clears the bell indicator 1 second after the pane gains focus.
     private var bellClearTimer: Timer? = nil
@@ -101,6 +112,19 @@ class TerminalPaneModel: PaneModel {
             progressClearTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: false) { [weak self] _ in
                 self?.progressReport = nil
             }
+        }
+    }
+
+    /// Show a toast overlay inside this pane.
+    func showToast(title: String, message: String?, duration: TimeInterval = 7.0) {
+        toast = PaneToast(
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            message: message?.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+
+        toastClearTimer?.invalidate()
+        toastClearTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
+            self?.toast = nil
         }
     }
 

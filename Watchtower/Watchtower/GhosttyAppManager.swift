@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import UserNotifications
 import os
 
 /// A named color entry from the Ghostty theme palette.
@@ -21,6 +22,8 @@ class GhosttyAppManager: ObservableObject {
         subsystem: Bundle.main.bundleIdentifier ?? "com.eyes.Watchtower",
         category: "GhosttyAppManager"
     )
+
+    private static var hasRequestedNotificationAuthorization = false
 
     enum ReadyState {
         case loading
@@ -265,6 +268,9 @@ class GhosttyAppManager: ObservableObject {
         case GHOSTTY_ACTION_SET_TITLE:
             return setTitle(app, target: target, v: action.action.set_title)
 
+        case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+            return desktopNotification(app, target: target, v: action.action.desktop_notification)
+
         case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
             return childExited(app, target: target, v: action.action.child_exited)
 
@@ -350,6 +356,93 @@ class GhosttyAppManager: ObservableObject {
             }
         }
         return true
+    }
+
+    private static func desktopNotification(
+        _ app: ghostty_app_t,
+        target: ghostty_target_s,
+        v: ghostty_action_desktop_notification_s
+    ) -> Bool {
+        guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
+        guard let surface = target.target.surface else { return false }
+        guard let view = surfaceView(from: surface) else { return false }
+
+        let title = v.title.map { String(cString: $0) }?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = v.body.map { String(cString: $0) }?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let resolvedTitle: String
+        if let title, !title.isEmpty {
+            resolvedTitle = title
+        } else {
+            resolvedTitle = "Terminal notification"
+        }
+
+        let resolvedBody: String?
+        if let body, !body.isEmpty {
+            resolvedBody = body
+        } else {
+            resolvedBody = nil
+        }
+
+        DispatchQueue.main.async {
+            view.terminal.showToast(title: resolvedTitle, message: resolvedBody)
+            postNativeNotification(
+                title: resolvedTitle,
+                body: resolvedBody,
+                paneTitle: view.terminal.title
+            )
+        }
+
+        return true
+    }
+
+    private static func postNativeNotification(title: String, body: String?, paneTitle: String?) {
+        let center = UNUserNotificationCenter.current()
+
+        func schedule() {
+            let content = UNMutableNotificationContent()
+            content.title = title
+            if let body, !body.isEmpty {
+                content.body = body
+            }
+            if let paneTitle, !paneTitle.isEmpty {
+                content.subtitle = paneTitle
+            }
+            content.sound = .default
+
+            let identifier = "watchtower.terminal.notification.\(UUID().uuidString)"
+            let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+            center.add(request) { error in
+                if let error {
+                    logger.error("Failed to post native notification: \(error.localizedDescription)")
+                }
+            }
+        }
+
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                schedule()
+            case .notDetermined:
+                if hasRequestedNotificationAuthorization {
+                    return
+                }
+                hasRequestedNotificationAuthorization = true
+                center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                    if let error {
+                        logger.error("Notification authorization request failed: \(error.localizedDescription)")
+                        return
+                    }
+                    if granted {
+                        schedule()
+                    }
+                }
+            case .denied:
+                return
+            @unknown default:
+                return
+            }
+        }
     }
 
     private static func childExited(
@@ -682,11 +775,11 @@ class GhosttyAppManager: ObservableObject {
         // but clipboard callbacks receive the surface's userdata
         // Actually no - let me re-read. The callbacks on ghostty_runtime_config_s
         // have userdata that is the surface's userdata for clipboard operations
-        
+
         // The read_clipboard_cb userdata is actually the surface userdata
         let surfaceView = Unmanaged<GhosttyTerminalNSView>.fromOpaque(userdata).takeUnretainedValue()
         guard let surface = surfaceView.surface else { return }
-        
+
         str.withCString { ptr in
             ghostty_surface_complete_clipboard_request(surface, ptr, state, false)
         }
@@ -702,7 +795,7 @@ class GhosttyAppManager: ObservableObject {
         guard let userdata = userdata else { return }
         let surfaceView = Unmanaged<GhosttyTerminalNSView>.fromOpaque(userdata).takeUnretainedValue()
         guard let surface = surfaceView.surface else { return }
-        
+
         let str = string.map { String(cString: $0) } ?? ""
         str.withCString { ptr in
             ghostty_surface_complete_clipboard_request(surface, ptr, state, true)

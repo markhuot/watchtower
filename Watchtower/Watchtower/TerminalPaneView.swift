@@ -213,6 +213,19 @@ struct PaneView: View {
                     .padding(.top, 54)  // 44px header + 10px gap
                     .transition(.opacity)
             }
+
+            // Terminal notification toast — shown when a terminal app emits
+            // a desktop notification action (e.g. OpenCode asking a question).
+            if let terminal = pane as? TerminalPaneModel,
+               let toast = terminal.toast,
+               !pane.isCollapsed {
+                PaneToastView(toast: toast)
+                    .padding(.top, 52)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .allowsHitTesting(false)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
             .frame(width: fixedContentWidth, alignment: .leading)
         .background(appManager.backgroundColor)
@@ -237,7 +250,50 @@ struct PaneView: View {
         .animation(.easeInOut(duration: 0.15), value: pane.headerColor)
         .animation(.easeOut(duration: 0.15), value: viewModel.commandPalettePaneId)
         .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
+        .animation(.easeInOut(duration: 0.2), value: (pane as? TerminalPaneModel)?.toast)
         .accessibilityIdentifier("pane")
+    }
+}
+
+struct PaneToastView: View {
+    let toast: PaneToast
+    @ObservedObject private var appManager = GhosttyAppManager.shared
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "bell.badge.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(appManager.highlightColor)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(toast.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(appManager.headerTextColor.opacity(0.95))
+                    .lineLimit(1)
+
+                if let message = toast.message, !message.isEmpty {
+                    Text(message)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundColor(appManager.headerTextColor.opacity(0.75))
+                        .lineLimit(3)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 420, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(appManager.backgroundColor.opacity(0.95))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(appManager.highlightColor.opacity(0.25), lineWidth: 1)
+        )
+        .shadow(color: appManager.backgroundColor.opacity(0.45), radius: 8, x: 0, y: 4)
     }
 }
 

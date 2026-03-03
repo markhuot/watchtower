@@ -1,6 +1,16 @@
 import AppKit
 
 extension NSView {
+    /// Recursively returns all descendant views.
+    func allDescendants() -> [NSView] {
+        var result: [NSView] = []
+        for subview in subviews {
+            result.append(subview)
+            result.append(contentsOf: subview.allDescendants())
+        }
+        return result
+    }
+
     /// Returns `true` if this view itself, or any ancestor (superview),
     /// is an instance of the given class (or a subclass of it).
     func isOrHasAncestor<T: NSView>(ofType type: T.Type) -> Bool {

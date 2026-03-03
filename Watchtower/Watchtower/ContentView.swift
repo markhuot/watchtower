@@ -2,6 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import Combine
 import WebKit
+import AppKit
 
 private let weblocUTType = UTType(importedAs: "com.apple.web-internet-location")
 
@@ -137,6 +138,10 @@ struct ContentView: View {
             }
         }
         .background(appManager.backgroundColor.ignoresSafeArea())
+        .background(
+            TitlebarStatusStripInstaller(viewModel: viewModel)
+                .frame(width: 0, height: 0)
+        )
         .contentShape(Rectangle())
         .coordinateSpace(name: "WindowSpace")
         .onPreferenceChange(PaneFramePreferenceKey.self) { paneFrames = $0 }
@@ -244,6 +249,127 @@ struct ContentView: View {
                 }
             }
         }
+    }
+}
+
+struct TitlebarPaneStatusStrip: View {
+    @ObservedObject var viewModel: PaneContainerViewModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(viewModel.panes) { pane in
+                TitlebarPaneStatusDot(
+                    pane: pane,
+                    onTap: {
+                        viewModel.focusPane(id: pane.id)
+                    }
+                )
+            }
+        }
+        .fixedSize()
+        .background(Color.clear)
+    }
+}
+
+struct TitlebarStatusStripInstaller: NSViewRepresentable {
+    @ObservedObject var viewModel: PaneContainerViewModel
+
+    func makeNSView(context: Context) -> TitlebarStatusInstallerNSView {
+        let view = TitlebarStatusInstallerNSView()
+        view.viewModel = viewModel
+        return view
+    }
+
+    func updateNSView(_ nsView: TitlebarStatusInstallerNSView, context: Context) {
+        nsView.viewModel = viewModel
+        nsView.installOrUpdate()
+    }
+}
+
+final class TitlebarStatusInstallerNSView: NSView {
+    weak var viewModel: PaneContainerViewModel?
+    private var hostingView: NSHostingView<TitlebarPaneStatusStrip>?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installOrUpdate()
+    }
+
+    func installOrUpdate() {
+        guard let viewModel,
+              let window,
+              let container = window.contentView?.firstViewFromRoot(withClassName: "NSTitlebarContainerView") else {
+            return
+        }
+
+        if let hostingView {
+            hostingView.rootView = TitlebarPaneStatusStrip(viewModel: viewModel)
+            if hostingView.superview !== container {
+                hostingView.removeFromSuperview()
+                container.addSubview(hostingView)
+                activateConstraints(for: hostingView, in: container)
+            }
+            return
+        }
+
+        let host = NSHostingView(rootView: TitlebarPaneStatusStrip(viewModel: viewModel))
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.wantsLayer = false
+        host.layer?.backgroundColor = NSColor.clear.cgColor
+        container.addSubview(host)
+        activateConstraints(for: host, in: container)
+        hostingView = host
+    }
+
+    private func activateConstraints(for host: NSView, in container: NSView) {
+        NSLayoutConstraint.activate([
+            host.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            host.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
+    }
+
+    deinit {
+        hostingView?.removeFromSuperview()
+    }
+}
+
+struct TitlebarPaneStatusDot: View {
+    @ObservedObject var pane: PaneModel
+    let onTap: () -> Void
+
+    private var helpText: String {
+        if let subtitle = pane.subtitle, !subtitle.isEmpty {
+            return "\(pane.title)\n\(subtitle)"
+        }
+        return pane.title
+    }
+
+    private var statusColor: Color {
+        switch pane.status {
+        case .active:
+            return .yellow
+        case .idle:
+            return .green
+        case .failed:
+            return .red
+        }
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 9, height: 9)
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.white.opacity(pane.isFocused ? 0.9 : 0.0), lineWidth: 1.5)
+                )
+                .shadow(color: statusColor.opacity(0.55), radius: 3, x: 0, y: 0)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+            .background(Color.clear)
+        .help(helpText)
     }
 }
 

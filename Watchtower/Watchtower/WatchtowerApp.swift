@@ -410,6 +410,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.isOpaque = true
         if #available(macOS 11.0, *) {
             window.titlebarSeparatorStyle = .none
+            window.toolbarStyle = .unified
         }
         window.toolbar?.showsBaselineSeparator = false
         // Match the window background to the Ghostty terminal background.
@@ -433,6 +434,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             window.toolbar?.showsBaselineSeparator = false
         }
+
+        // Toolbar/principal item host views are often created lazily after
+        // initial window setup. Re-apply styling a few times to catch the
+        // final hierarchy and remove any rounded host background pills.
+        for delay in [0.05, 0.2, 0.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak window] in
+                guard let window else { return }
+                self.styleTitlebarContainer(for: window, color: nsColor)
+            }
+        }
     }
 
     /// Finds the titlebar container for the given window (normal or fullscreen)
@@ -442,12 +453,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             container.wantsLayer = true
             container.layer?.backgroundColor = color.cgColor
 
-            if let bgView = container.firstDescendant(withClassName: "NSTitlebarBackgroundView") {
-                bgView.isHidden = true
-            }
+            // Remove titlebar/toolbar host chrome so custom principal views
+            // don't render on top of a rounded dark capsule.
+            for view in container.allDescendants() {
+                let className = String(describing: type(of: view))
 
-            if let effectView = container.firstDescendant(withClassName: "NSVisualEffectView") {
-                effectView.isHidden = true
+                if className == "NSTitlebarBackgroundView" || className == "NSVisualEffectView" {
+                    view.isHidden = true
+                    continue
+                }
+
+                if className.contains("ToolbarTitle") ||
+                    className.contains("ToolbarItemViewer") ||
+                    className.contains("ToolbarItemView") {
+                    view.wantsLayer = true
+                    view.layer?.backgroundColor = NSColor.clear.cgColor
+                    view.layer?.cornerRadius = 0
+
+                    for child in view.allDescendants() {
+                        let childClass = String(describing: type(of: child))
+                        if childClass == "NSVisualEffectView" || childClass.contains("Background") {
+                            child.isHidden = true
+                        }
+                        child.wantsLayer = true
+                        child.layer?.backgroundColor = NSColor.clear.cgColor
+                        child.layer?.cornerRadius = 0
+                    }
+                }
             }
         }
     }

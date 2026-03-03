@@ -322,6 +322,8 @@ final class IPCServer {
             return handleZoom()
         case "set-pane-color":
             return handleSetPaneColor(json, viewModel: viewModel)
+        case "set-pane-status":
+            return handleSetPaneStatus(json, viewModel: viewModel)
         default:
             return ["ok": false, "error": "Unknown command: \(command)"]
         }
@@ -555,6 +557,42 @@ final class IPCServer {
             pane.headerColor = nil
         }
 
+        return ["ok": true]
+    }
+
+    // MARK: - Pane Status
+
+    private func handleSetPaneStatus(_ json: [String: Any], viewModel: PaneContainerViewModel) -> [String: Any] {
+        guard let paneIdStr = json["paneId"] as? String,
+              let paneId = UUID(uuidString: paneIdStr) else {
+            return ["ok": false, "error": "Missing or invalid 'paneId' field"]
+        }
+
+        guard let statusRaw = json["status"] as? String else {
+            return ["ok": false, "error": "Missing 'status' field"]
+        }
+
+        let status: PaneStatus
+        switch statusRaw.lowercased() {
+        case "active":
+            status = .active
+        case "idle":
+            status = .idle
+        case "failed":
+            status = .failed
+        default:
+            return ["ok": false, "error": "Invalid status: \(statusRaw). Expected active, idle, or failed"]
+        }
+
+        guard let pane = viewModel.panes.first(where: { $0.id == paneId }) else {
+            return ["ok": false, "error": "Pane not found: \(paneIdStr)"]
+        }
+
+        guard let terminal = pane as? TerminalPaneModel else {
+            return ["ok": false, "error": "Pane is not a terminal: \(paneIdStr)"]
+        }
+
+        terminal.terminalStatus = status
         return ["ok": true]
     }
 
