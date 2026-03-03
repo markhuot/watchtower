@@ -1184,6 +1184,16 @@ class PaneContainerViewModel: ObservableObject {
     /// Cleared by `dismissCommandPalette`.
     @Published var commandPaletteInitialText: String? = nil
 
+    /// The browser pane ID hosting the floating find bar, or `nil` when hidden.
+    @Published var browserFindPaneId: UUID? = nil
+
+    /// Current query text in the floating browser find bar.
+    @Published var browserFindQuery: String = ""
+
+    /// Incremented each time find is explicitly opened so the bar can
+    /// re-focus the text field on repeated Cmd+F presses.
+    @Published var browserFindFocusToken: UInt = 0
+
     /// When set, the next NSView matching this pane ID to enter the window
     /// hierarchy will claim first responder. Setting a new value automatically
     /// cancels the previous one via `didSet`, preventing races.
@@ -1199,6 +1209,11 @@ class PaneContainerViewModel: ObservableObject {
     /// Convenience: whether the command palette is currently visible.
     var isCommandPalettePresented: Bool {
         commandPalettePaneId != nil
+    }
+
+    /// Convenience: whether the browser find bar is currently visible.
+    var isBrowserFindPresented: Bool {
+        browserFindPaneId != nil
     }
 
     /// Whether the window is in macOS native fullscreen mode.
@@ -1503,6 +1518,88 @@ class PaneContainerViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
             self?.focusPaneById(paneId)
         }
+    }
+
+    /// Show the browser find bar (Cmd+F) on the focused browser pane and
+    /// focus its text field for immediate typing.
+    func openBrowserFind() {
+        guard let browser = contextualPane as? BrowserPaneModel else { return }
+
+        if browser.isCollapsed {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                browser.isCollapsed = false
+            }
+        }
+
+        if browserFindPaneId != browser.id {
+            browserFindPaneId = browser.id
+            browserFindQuery = ""
+        }
+        browserFindFocusToken &+= 1
+        focusPane(browser)
+    }
+
+    /// Update active browser find query and trigger a native find.
+    func updateBrowserFindQuery(_ query: String) {
+        browserFindQuery = query
+        guard let paneId = browserFindPaneId,
+              let browser = panes.first(where: { $0.id == paneId }) as? BrowserPaneModel else {
+            return
+        }
+
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            browser.clearFindInPage()
+        } else {
+            browser.findInPage(query)
+        }
+    }
+
+    /// Jump to the next browser find match for the current query (Cmd+G).
+    func findNextInBrowser() {
+        if !isBrowserFindPresented {
+            openBrowserFind()
+            return
+        }
+
+        guard let paneId = browserFindPaneId,
+              let browser = panes.first(where: { $0.id == paneId }) as? BrowserPaneModel else {
+            return
+        }
+        guard !browserFindQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            browserFindFocusToken &+= 1
+            return
+        }
+
+        browser.findNextInPage()
+    }
+
+    /// Jump to the previous browser find match for the current query (Shift+Cmd+G).
+    func findPreviousInBrowser() {
+        if !isBrowserFindPresented {
+            openBrowserFind()
+            return
+        }
+
+        guard let paneId = browserFindPaneId,
+              let browser = panes.first(where: { $0.id == paneId }) as? BrowserPaneModel else {
+            return
+        }
+        guard !browserFindQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            browserFindFocusToken &+= 1
+            return
+        }
+
+        browser.findPreviousInPage()
+    }
+
+    /// Hide the browser find bar and clear active find highlights.
+    func dismissBrowserFind() {
+        if let paneId = browserFindPaneId,
+           let browser = panes.first(where: { $0.id == paneId }) as? BrowserPaneModel {
+            browser.clearFindInPage()
+        }
+        browserFindPaneId = nil
+        browserFindQuery = ""
     }
 
     /// Dismiss the command palette. If no `focusPane` call was made since
@@ -1978,6 +2075,11 @@ class PaneContainerViewModel: ObservableObject {
             exitFocusMode()
         }
 
+        if browserFindPaneId == id {
+            browserFindPaneId = nil
+            browserFindQuery = ""
+        }
+
         guard let index = panes.firstIndex(where: { $0.id == id }) else {
             NSLog("[CEF-CLOSE] removePane: pane %@ not found in array!", id.uuidString)
             return
@@ -2197,6 +2299,10 @@ class PaneContainerViewModel: ObservableObject {
         // Auto-dismiss the command palette when focus moves to a different pane.
         if let paletteId = commandPalettePaneId, paletteId != pane.id {
             commandPalettePaneId = nil
+        }
+
+        if let findPaneId = browserFindPaneId, findPaneId != pane.id {
+            dismissBrowserFind()
         }
 
         // Explicitly clear isFocused on all other panes. Normally this is

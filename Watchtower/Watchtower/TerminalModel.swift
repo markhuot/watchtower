@@ -134,6 +134,7 @@ class TerminalPaneModel: PaneModel {
     /// the pane receives focus and then clears 1 second later.
     func ringBell() {
         hasBell = true
+        bellEventToken &+= 1
         bellClearTimer?.invalidate()
         bellClearTimer = nil
 

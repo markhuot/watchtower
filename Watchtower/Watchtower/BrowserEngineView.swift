@@ -28,6 +28,18 @@ protocol BrowserEngineView: NSView {
 
     /// Open this engine's web inspector / developer tools UI.
     func openWebInspector()
+
+    /// Find all matches for the given query and select the first match.
+    func findInPage(_ query: String)
+
+    /// Advance to the next match for the active find query.
+    func findNextInPage()
+
+    /// Move to the previous match for the active find query.
+    func findPreviousInPage()
+
+    /// Clear the active find state and any current selection.
+    func clearFindInPage()
 }
 
 // MARK: - App Shortcut Detection
@@ -72,6 +84,11 @@ func isWatchtowerAppShortcut(_ event: NSEvent) -> Bool {
     case ([.command], "]"):                return true  // Go Forward
     case ([.command], "r"):                return true  // Reload Page
     case ([.command, .option], "i"):       return true  // Open Web Inspector
+
+    // Browser find-in-page
+    case ([.command], "f"):                return true  // Find
+    case ([.command], "g"):                return true  // Find Next
+    case ([.command, .shift], "g"):        return true  // Find Previous
 
     default: return false
     }

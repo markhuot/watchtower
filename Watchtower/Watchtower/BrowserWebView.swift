@@ -63,6 +63,7 @@ enum BrowserConfiguration {
 /// to the menu system instead of being consumed by WebKit.
 class WatchtowerWebView: WKWebView, BrowserEngineView {
     weak var browser: BrowserPaneModel?
+    private var activeFindQuery: String = ""
 
     /// While a pane reorder drag is active, this web view should not
     /// participate as an NSDraggingDestination. Returning no-op drag
@@ -135,6 +136,78 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
         }
 
         logger.error("Failed to open WebKit web inspector: no compatible selector path found")
+    }
+
+    func findInPage(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        activeFindQuery = trimmed
+        guard !trimmed.isEmpty else {
+            clearFindInPage()
+            return
+        }
+
+        installFindSelectionStyleIfNeeded()
+
+        if #available(macOS 11.0, *) {
+            let config = WKFindConfiguration()
+            config.backwards = false
+            config.caseSensitive = false
+            config.wraps = true
+            find(trimmed, configuration: config) { _ in }
+        }
+    }
+
+    func findNextInPage() {
+        guard !activeFindQuery.isEmpty else { return }
+        if #available(macOS 11.0, *) {
+            let config = WKFindConfiguration()
+            config.backwards = false
+            config.caseSensitive = false
+            config.wraps = true
+            find(activeFindQuery, configuration: config) { _ in }
+        }
+    }
+
+    func findPreviousInPage() {
+        guard !activeFindQuery.isEmpty else { return }
+        if #available(macOS 11.0, *) {
+            let config = WKFindConfiguration()
+            config.backwards = true
+            config.caseSensitive = false
+            config.wraps = true
+            find(activeFindQuery, configuration: config) { _ in }
+        }
+    }
+
+    func clearFindInPage() {
+        activeFindQuery = ""
+        removeFindSelectionStyle()
+        evaluateJavaScript("window.getSelection && window.getSelection().removeAllRanges();") { _, _ in }
+    }
+
+    private func installFindSelectionStyleIfNeeded() {
+        let script = """
+        (function() {
+            if (document.getElementById('watchtower-find-selection-style')) return;
+            var style = document.createElement('style');
+            style.id = 'watchtower-find-selection-style';
+            style.textContent = '::selection { background: rgba(255, 210, 0, 0.95) !important; color: #000 !important; text-shadow: none !important; }';
+            document.head.appendChild(style);
+        })();
+        """
+        evaluateJavaScript(script) { _, _ in }
+    }
+
+    private func removeFindSelectionStyle() {
+        let script = """
+        (function() {
+            var style = document.getElementById('watchtower-find-selection-style');
+            if (style && style.parentNode) {
+                style.parentNode.removeChild(style);
+            }
+        })();
+        """
+        evaluateJavaScript(script) { _, _ in }
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -599,6 +672,9 @@ struct WebKitBrowserView: NSViewRepresentable {
             // re-sets the flag after the provisional-navigation reset.
             DispatchQueue.main.async { [weak self] in
                 self?.browser.hasInteractedForms = false
+            }
+            if let watchtowerWebView = webView as? WatchtowerWebView {
+                watchtowerWebView.clearFindInPage()
             }
         }
 

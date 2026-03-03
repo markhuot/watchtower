@@ -50,6 +50,12 @@ class PaneModel: Identifiable, ObservableObject {
     /// the pane has been focused for 1 second.
     @Published var hasBell: Bool = false
 
+    /// Monotonic token incremented for each bell event.
+    /// Unlike `hasBell`, this changes on every bell so the UI can trigger
+    /// transient effects (like a shake) even when the bell indicator is
+    /// already visible.
+    @Published var bellEventToken: UInt64 = 0
+
     /// Custom header background color for this pane. When `nil`, the
     /// default theme background is used. Set via the command palette's
     /// "Set Pane Color" action.

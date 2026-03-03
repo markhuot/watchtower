@@ -109,6 +109,26 @@ class BrowserPaneModel: PaneModel {
         engineView?.openWebInspector()
     }
 
+    /// Find all occurrences for the current query and select the first match.
+    func findInPage(_ query: String) {
+        engineView?.findInPage(query)
+    }
+
+    /// Select the next match for the active find query.
+    func findNextInPage() {
+        engineView?.findNextInPage()
+    }
+
+    /// Select the previous match for the active find query.
+    func findPreviousInPage() {
+        engineView?.findPreviousInPage()
+    }
+
+    /// Clear find state and any active find highlight.
+    func clearFindInPage() {
+        engineView?.clearFindInPage()
+    }
+
     /// Switch this pane to a different rendering engine. Clears the current
     /// engine view reference so the SwiftUI view layer re-creates it with
     /// the new engine.

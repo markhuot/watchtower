@@ -5,6 +5,8 @@ struct PaneView: View {
     @ObservedObject var pane: PaneModel
     @ObservedObject var viewModel: PaneContainerViewModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
+    @State private var shakeOffset: CGFloat = 0
+    @State private var shakeTask: Task<Void, Never>? = nil
     let fixedContentWidth: CGFloat?
 
     /// Per-window active state. `.key` means this window is the key window,
@@ -38,6 +40,11 @@ struct PaneView: View {
     /// Whether the command palette is open on this pane.
     private var isPaletteOpenHere: Bool {
         viewModel.commandPalettePaneId == pane.id
+    }
+
+    /// Whether the browser find bar is open on this pane.
+    private var isBrowserFindOpenHere: Bool {
+        viewModel.browserFindPaneId == pane.id
     }
 
     /// Whether the highlight should be shown at full intensity.
@@ -226,6 +233,20 @@ struct PaneView: View {
                     .allowsHitTesting(false)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+
+            // Floating browser find bar (Cmd+F / Cmd+G)
+            if let browser = pane as? BrowserPaneModel,
+               isBrowserFindOpenHere,
+               !pane.isCollapsed {
+                BrowserFindBarView(
+                    browser: browser,
+                    viewModel: viewModel
+                )
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
             .frame(width: fixedContentWidth, alignment: .leading)
         .background(appManager.backgroundColor)
@@ -243,15 +264,141 @@ struct PaneView: View {
                 .allowsHitTesting(false)
         )
         .opacity(pane.isDragging ? 0.5 : 1.0)
+        .offset(x: shakeOffset)
         .animation(.easeInOut(duration: 0.15), value: pane.isFocused)
         .animation(.easeInOut(duration: 0.15), value: controlActiveState)
         .animation(.easeInOut(duration: 0.15), value: pane.isDragging)
         .animation(.easeInOut(duration: 0.15), value: pane.hasBell)
         .animation(.easeInOut(duration: 0.15), value: pane.headerColor)
         .animation(.easeOut(duration: 0.15), value: viewModel.commandPalettePaneId)
+        .animation(.easeOut(duration: 0.15), value: viewModel.browserFindPaneId)
         .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
         .animation(.easeInOut(duration: 0.2), value: (pane as? TerminalPaneModel)?.toast)
+        .onChange(of: pane.bellEventToken) { _ in
+            triggerBellShake()
+        }
+        .onDisappear {
+            shakeTask?.cancel()
+            shakeTask = nil
+            shakeOffset = 0
+        }
         .accessibilityIdentifier("pane")
+    }
+
+    private func triggerBellShake() {
+        guard pane is TerminalPaneModel else { return }
+
+        shakeTask?.cancel()
+        shakeTask = Task { @MainActor in
+            let keyframes: [CGFloat] = [6, -6, 4, -4, 3, -3, 1.5, -1.5, 0]
+            let stepDuration: TimeInterval = 0.022
+
+            for value in keyframes {
+                if Task.isCancelled { return }
+                withAnimation(.linear(duration: stepDuration)) {
+                    shakeOffset = value
+                }
+
+                let sleepNs = UInt64(stepDuration * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: sleepNs)
+            }
+
+            withAnimation(.linear(duration: 0.01)) {
+                shakeOffset = 0
+            }
+            shakeTask = nil
+        }
+    }
+}
+
+struct BrowserFindBarView: View {
+    @ObservedObject var browser: BrowserPaneModel
+    @ObservedObject var viewModel: PaneContainerViewModel
+    @ObservedObject private var appManager = GhosttyAppManager.shared
+    @FocusState private var isFindFieldFocused: Bool
+
+    private var findBinding: Binding<String> {
+        Binding(
+            get: { viewModel.browserFindQuery },
+            set: { viewModel.updateBrowserFindQuery($0) }
+        )
+    }
+
+    private var isQueryEmpty: Bool {
+        viewModel.browserFindQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var borderColor: Color {
+        if isFindFieldFocused {
+            return appManager.highlightColor.opacity(0.55)
+        }
+        return appManager.foregroundColor.opacity(0.22)
+    }
+
+    private var borderWidth: CGFloat {
+        isFindFieldFocused ? 2 : 1
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Find on page", text: findBinding)
+                .textFieldStyle(.roundedBorder)
+                .focused($isFindFieldFocused)
+                .onSubmit {
+                    findNext()
+                }
+
+            Button("Next") {
+                findNext()
+            }
+            .buttonStyle(.bordered)
+            .keyboardShortcut(.return, modifiers: [])
+            .disabled(isQueryEmpty)
+
+            Button("Previous") {
+                findPrevious()
+            }
+            .buttonStyle(.bordered)
+            .keyboardShortcut(.return, modifiers: [.shift])
+            .disabled(isQueryEmpty)
+
+            Button {
+                viewModel.dismissBrowserFind()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Close Find")
+        }
+        .padding(8)
+        .frame(maxWidth: 430)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(appManager.backgroundColor.opacity(0.96))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(borderColor, lineWidth: borderWidth)
+        )
+        .onAppear {
+            DispatchQueue.main.async {
+                isFindFieldFocused = true
+            }
+        }
+        .onChange(of: viewModel.browserFindFocusToken) { _ in
+            guard viewModel.browserFindPaneId == browser.id else { return }
+            DispatchQueue.main.async {
+                isFindFieldFocused = true
+            }
+        }
+    }
+
+    private func findNext() {
+        viewModel.findNextInBrowser()
+    }
+
+    private func findPrevious() {
+        viewModel.findPreviousInBrowser()
     }
 }
 

@@ -25,6 +25,7 @@ import { setColor } from "./commands/set-color.ts";
 import { setStatus } from "./commands/set-status.ts";
 import { centerPane } from "./commands/center-pane.ts";
 import { installOpencode } from "./commands/install-opencode.ts";
+import { installClaude } from "./commands/install-claude.ts";
 
 const CLI_VERSION = "0.1.0";
 const args = process.argv.slice(2);
@@ -62,6 +63,7 @@ Commands:
   set color       Set the pane header color (hex or --reset)
   set status      Set the pane status (active|idle|failed)
   install opencode  Install Watchtower plugin for OpenCode
+  install claude    Install Watchtower hooks for Claude Code
 
 Options:
   --help, -h      Show this help message
@@ -117,6 +119,7 @@ const twoWordCommands: Record<string, (args: string[]) => Promise<void>> = {
   "set status": setStatus,
   "center pane": centerPane,
   "install opencode": installOpencode,
+  "install claude": installClaude,
 };
 
 const firstArg = args[0];

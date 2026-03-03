@@ -147,6 +147,26 @@ struct WatchtowerApp: App {
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .disabled(!isBrowserFocused)
+
+                Divider()
+
+                Button("Find on Page") {
+                    activeViewModel?.openBrowserFind()
+                }
+                .keyboardShortcut("f", modifiers: [.command])
+                .disabled(!isBrowserFocused)
+
+                Button("Find Next") {
+                    activeViewModel?.findNextInBrowser()
+                }
+                .keyboardShortcut("g", modifiers: [.command])
+                .disabled(!isBrowserFocused)
+
+                Button("Find Previous") {
+                    activeViewModel?.findPreviousInBrowser()
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(!isBrowserFocused)
             }
         }
 
@@ -302,6 +322,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return nil
             }
 
+            if self.isBrowserFindShortcut(event),
+               let browser,
+               let viewModel = browser.viewModel {
+                shortcutLogger.debug("Handling browser find shortcut")
+                viewModel.openBrowserFind()
+                return nil
+            }
+
+            if self.isBrowserFindNextShortcut(event),
+               let browser,
+               let viewModel = browser.viewModel {
+                shortcutLogger.debug("Handling browser find-next shortcut")
+                viewModel.findNextInBrowser()
+                return nil
+            }
+
+            if self.isBrowserFindPreviousShortcut(event),
+               let browser,
+               let viewModel = browser.viewModel {
+                shortcutLogger.debug("Handling browser find-previous shortcut")
+                viewModel.findPreviousInBrowser()
+                return nil
+            }
+
             let menuHandled = NSApp.mainMenu?.performKeyEquivalent(with: event) == true
             shortcutLogger.debug("Main menu performKeyEquivalent handled=\(menuHandled)")
             if menuHandled {
@@ -394,6 +438,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard flags == [.command, .option] else { return false }
         guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
         return chars == "i"
+    }
+
+    private func isBrowserFindShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock])
+
+        guard flags == [.command] else { return false }
+        guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        return chars == "f"
+    }
+
+    private func isBrowserFindNextShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock])
+
+        guard flags == [.command] else { return false }
+        guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        return chars == "g"
+    }
+
+    private func isBrowserFindPreviousShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock])
+
+        guard flags == [.command, .shift] else { return false }
+        guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        return chars == "g"
     }
 
     @objc func windowNeedsConfiguration(_ notification: Notification) {

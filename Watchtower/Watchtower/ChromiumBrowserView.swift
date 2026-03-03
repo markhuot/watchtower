@@ -76,6 +76,19 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
         cefOpenDevTools(for: cefBrowser, browserModel: browser)
     }
 
+    func findInPage(_ query: String) {
+        _ = query
+    }
+
+    func findNextInPage() {
+    }
+
+    func findPreviousInPage() {
+    }
+
+    func clearFindInPage() {
+    }
+
     // MARK: - Pending URL
 
     var pendingURL: String?
