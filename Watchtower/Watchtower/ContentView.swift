@@ -340,6 +340,8 @@ struct TitlebarPaneStatusDot: View {
     let isSelected: Bool
     let onTap: () -> Void
 
+    @State private var bounceYOffset: CGFloat = 0
+
     private var helpText: String {
         if let subtitle = pane.subtitle, !subtitle.isEmpty {
             return "\(pane.title)\n\(subtitle)"
@@ -351,21 +353,49 @@ struct TitlebarPaneStatusDot: View {
         appManager.paneStatusColor(pane.status)
     }
 
+    private var dotSize: CGFloat {
+        isSelected ? 12 : 9
+    }
+
     var body: some View {
         Button(action: onTap) {
             Circle()
                 .fill(statusColor)
-                .frame(width: 9, height: 9)
+                .frame(width: dotSize, height: dotSize)
                 .shadow(
-                    color: statusColor.opacity(isSelected ? 1.0 : 0.45),
-                    radius: isSelected ? 10 : 3,
+                    color: statusColor.opacity(isSelected ? 1.0 : 0.4),
+                    radius: isSelected ? 5 : 3,
                     x: 0,
-                    y: isSelected ? 2 : 0
+                    y: isSelected ? 1 : 0
                 )
+                .offset(y: bounceYOffset)
+                .animation(.spring(response: 0.34, dampingFraction: 0.7), value: isSelected)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
             .background(Color.clear)
+        .onChange(of: isSelected) { selected in
+            bounceYOffset = 0
+            if selected {
+                withAnimation(.easeOut(duration: 0.14)) {
+                    bounceYOffset = -3
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) {
+                        bounceYOffset = 0
+                    }
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.14)) {
+                    bounceYOffset = 3
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) {
+                        bounceYOffset = 0
+                    }
+                }
+            }
+        }
         .help(helpText)
     }
 }
@@ -484,7 +514,7 @@ struct FocusModeWrapper<Content: View>: View {
             .opacity(pane.isClosing ? 0 : (pane.isAppearing ? 0 : 1))
             .animation(.easeIn(duration: min(0.12, pane.animationDuration * 0.45)), value: pane.isClosing)
             .offset(
-                x: pane.isAppearing ? 50 : (pane.isClosing ? -20 : 0),
+                x: pane.isAppearing ? -50 : (pane.isClosing ? -20 : 0),
                 y: 0
             )
             .animation(.easeOut(duration: pane.animationDuration), value: pane.isAppearing)
