@@ -212,7 +212,31 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    private func canClaimFocusNow() -> Bool {
+        guard let browser = browser, let vm = browser.viewModel else { return true }
+
+        if vm.contextualPane?.id == browser.id {
+            return true
+        }
+
+        if vm.pendingFocus?.paneId == browser.id {
+            return true
+        }
+
+        guard let event = NSApp.currentEvent else { return false }
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            return true
+        default:
+            return false
+        }
+    }
+
     override func becomeFirstResponder() -> Bool {
+        guard canClaimFocusNow() else {
+            return false
+        }
+
         let result = super.becomeFirstResponder()
         if result {
             browser?.isFocused = true

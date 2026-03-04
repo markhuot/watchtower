@@ -120,6 +120,26 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    private func canClaimFocusNow() -> Bool {
+        guard let browser = browser, let vm = browser.viewModel else { return true }
+
+        if vm.contextualPane?.id == browser.id {
+            return true
+        }
+
+        if vm.pendingFocus?.paneId == browser.id {
+            return true
+        }
+
+        guard let event = NSApp.currentEvent else { return false }
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Tracks whether we intentionally gave CEF focus. Used by the CEF
     /// focus handler callbacks to distinguish intentional focus from CEF
     /// trying to reclaim focus on its own.
@@ -131,6 +151,10 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
     private var firstResponderObservation: NSKeyValueObservation?
 
     override func becomeFirstResponder() -> Bool {
+        guard canClaimFocusNow() else {
+            return false
+        }
+
         let result = super.becomeFirstResponder()
 
         if result {

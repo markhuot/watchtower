@@ -260,6 +260,7 @@ struct TitlebarPaneStatusStrip: View {
             ForEach(viewModel.panes) { pane in
                 TitlebarPaneStatusDot(
                     pane: pane,
+                    isSelected: viewModel.focusedPaneId == pane.id || pane.isFocused,
                     onTap: {
                         viewModel.focusPane(id: pane.id)
                     }
@@ -335,6 +336,8 @@ final class TitlebarStatusInstallerNSView: NSView {
 
 struct TitlebarPaneStatusDot: View {
     @ObservedObject var pane: PaneModel
+    @ObservedObject private var appManager = GhosttyAppManager.shared
+    let isSelected: Bool
     let onTap: () -> Void
 
     private var helpText: String {
@@ -345,14 +348,7 @@ struct TitlebarPaneStatusDot: View {
     }
 
     private var statusColor: Color {
-        switch pane.status {
-        case .active:
-            return .yellow
-        case .idle:
-            return .green
-        case .failed:
-            return .red
-        }
+        appManager.paneStatusColor(pane.status)
     }
 
     var body: some View {
@@ -360,11 +356,12 @@ struct TitlebarPaneStatusDot: View {
             Circle()
                 .fill(statusColor)
                 .frame(width: 9, height: 9)
-                .overlay(
-                    Circle()
-                        .strokeBorder(Color.white.opacity(pane.isFocused ? 0.9 : 0.0), lineWidth: 1.5)
+                .shadow(
+                    color: statusColor.opacity(isSelected ? 1.0 : 0.45),
+                    radius: isSelected ? 10 : 3,
+                    x: 0,
+                    y: isSelected ? 2 : 0
                 )
-                .shadow(color: statusColor.opacity(0.55), radius: 3, x: 0, y: 0)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -1330,8 +1327,19 @@ class PaneContainerViewModel: ObservableObject {
         // pane-to-pane scrolling. This monitor detects that situation and
         // programmatically scrolls the parent NSScrollView.
         browserScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            self?.handleBrowserHorizontalScroll(event)
-            return event  // always pass through — don't break WKWebView's vertical scrolling
+            guard let self = self else { return event }
+            guard self.isScrollEventOverBrowserPane(event) else { return event }
+
+            // Option held: webview receives native scrolling in any direction,
+            // and Watchtower pane-strip scrolling is disabled.
+            if event.modifierFlags.contains(.option) {
+                return event
+            }
+
+            // No modifiers: forward only horizontal motion to Watchtower's
+            // pane strip, while allowing vertical scrolling in the webview.
+            self.handleBrowserHorizontalScroll(event)
+            return self.zeroedScrollEvent(event, zeroX: true, zeroY: false)
         }
 
         // Track macOS native fullscreen state
@@ -1402,6 +1410,37 @@ class PaneContainerViewModel: ObservableObject {
 
         clipView.setBoundsOrigin(newOrigin)
         parentScrollView.reflectScrolledClipView(clipView)
+    }
+
+    /// Returns a copy of `event` with selected scroll axes zeroed out.
+    private func zeroedScrollEvent(_ event: NSEvent, zeroX: Bool, zeroY: Bool) -> NSEvent {
+        guard event.type == .scrollWheel else { return event }
+        guard let cgEvent = event.cgEvent else { return event }
+
+        if zeroX {
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventDeltaAxis2, value: 0)
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventPointDeltaAxis2, value: 0)
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventFixedPtDeltaAxis2, value: 0)
+        }
+
+        if zeroY {
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventDeltaAxis1, value: 0)
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventPointDeltaAxis1, value: 0)
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventFixedPtDeltaAxis1, value: 0)
+        }
+
+        return NSEvent(cgEvent: cgEvent) ?? event
+    }
+
+    /// Returns true when the scroll event occurred over a browser pane
+    /// (WKWebView or ChromiumBrowserView).
+    private func isScrollEventOverBrowserPane(_ event: NSEvent) -> Bool {
+        guard let window = event.window else { return false }
+        let locationInWindow = event.locationInWindow
+        guard let hitView = window.contentView?.hitTest(locationInWindow) else { return false }
+
+        return hitView.isOrHasAncestor(ofType: WKWebView.self)
+            || hitView.isOrHasAncestor(ofType: ChromiumBrowserView.self)
     }
 
     /// Walk up the view hierarchy from `view` to find the horizontal

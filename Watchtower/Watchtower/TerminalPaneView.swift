@@ -560,17 +560,13 @@ struct PaneHeaderView: View {
 
 struct ProgressBarView: View {
     let progress: PaneProgress?
+    @ObservedObject private var appManager = GhosttyAppManager.shared
 
     @State private var indeterminateOffset: CGFloat = -0.3
 
     private var progressColor: Color {
         guard let progress = progress else { return .clear }
-        switch progress.state {
-        case .normal: return .accentColor
-        case .error: return .red
-        case .paused: return .orange
-        case .indeterminate: return .accentColor
-        }
+        return appManager.paneProgressColor(progress.state)
     }
 
     var body: some View {
@@ -640,14 +636,7 @@ struct StatusCircle: View {
     }
 
     private var statusColor: Color {
-        switch status {
-        case .active:
-            return .yellow
-        case .idle:
-            return .green
-        case .failed:
-            return .red
-        }
+        appManager.paneStatusColor(status)
     }
 }
 

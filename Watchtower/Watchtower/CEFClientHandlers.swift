@@ -641,7 +641,13 @@ private func cefMakeFocusHandler(context: CEFClientContext) -> UnsafeMutablePoin
     handler.pointee.on_set_focus = { (selfPtr, browser, source) -> Int32 in
         guard let selfPtr = selfPtr else { return 1 }
         guard let ctx = cefContextForHandler(UnsafeMutableRawPointer(selfPtr)) else { return 1 }
-        let allowed = ctx.browserView?.cefHasFocus == true
+        guard let browserModel = ctx.browserModel,
+              let vm = browserModel.viewModel else {
+            return 1
+        }
+        let isContextual = vm.contextualPane?.id == browserModel.id
+        let isPending = vm.pendingFocus?.paneId == browserModel.id
+        let allowed = ctx.browserView?.cefHasFocus == true && (isContextual || isPending)
         return allowed ? 0 : 1
     }
 
@@ -663,14 +669,16 @@ private func cefMakeFocusHandler(context: CEFClientContext) -> UnsafeMutablePoin
                 return
             }
             guard let browserModel = ctx.browserModel else { return }
+            guard let vm = browserModel.viewModel else { return }
+            let isContextual = vm.contextualPane?.id == browserModel.id
+            let isPending = vm.pendingFocus?.paneId == browserModel.id
+            guard isContextual || isPending else { return }
             browserModel.isFocused = true
 
             // Notify the view model so focusModePaneId is updated and
             // other panes' isFocused flags are cleared.
-            if let vm = browserModel.viewModel {
-                if vm.focusModePaneId != browserModel.id || vm.contextualPane?.id != browserModel.id {
-                    vm.focusPane(id: browserModel.id)
-                }
+            if vm.focusModePaneId != browserModel.id || vm.contextualPane?.id != browserModel.id {
+                vm.focusPane(id: browserModel.id)
             }
 
         }

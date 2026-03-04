@@ -585,6 +585,38 @@ class GhosttyAppManager: ObservableObject {
 
     // MARK: - Theme Colors
 
+    /// Resolve semantic pane status colors from the active Ghostty 16-color palette.
+    /// Falls back to system semantic colors if palette entries are unavailable.
+    func paneStatusColor(_ status: PaneStatus) -> Color {
+        switch status {
+        case .active:
+            return themePaletteColor(index: 11, fallback: .yellow)
+        case .idle:
+            return themePaletteColor(index: 10, fallback: .green)
+        case .failed:
+            return themePaletteColor(index: 9, fallback: .red)
+        }
+    }
+
+    /// Resolve semantic pane progress colors from the active Ghostty 16-color palette.
+    /// Falls back to existing system semantic colors if palette entries are unavailable.
+    func paneProgressColor(_ state: PaneProgress.State) -> Color {
+        switch state {
+        case .normal:
+            return themePaletteColor(index: 12, fallback: .accentColor)
+        case .error:
+            return themePaletteColor(index: 9, fallback: .red)
+        case .paused:
+            return themePaletteColor(index: 11, fallback: .orange)
+        case .indeterminate:
+            return themePaletteColor(index: 12, fallback: .accentColor)
+        }
+    }
+
+    private func themePaletteColor(index: Int, fallback: Color) -> Color {
+        themeColors.first(where: { $0.id == index })?.color ?? fallback
+    }
+
     /// Compute an appropriate text color (white or black) for the given
     /// background color, using WCAG 2.0 relative luminance.
     static func textColor(for bgColor: Color) -> Color {
