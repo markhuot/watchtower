@@ -269,6 +269,11 @@ struct CommandPaletteView: View {
             items.append(.builtIn(name: collapseLabel) { vm in
                 vm.toggleCollapsePane()
             })
+
+            let pinLabel = viewModel.pinnedPaneId == focusedPane.id ? "Unpin Pane" : "Pin Pane"
+            items.append(.builtIn(name: pinLabel) { vm in
+                vm.togglePinPane()
+            })
         }
         items.append(.builtIn(name: "Toggle Full Screen", shortcut: "\u{2303}\u{2318}F") { vm in
             NSApp.keyWindow?.toggleFullScreen(nil)

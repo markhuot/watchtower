@@ -309,9 +309,17 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     /// has an active foreground process. This is the same check used by
     /// the window-close confirmation, ensuring the status icon stays in
     /// sync with that behavior.
-    func refreshStatusFromSurface() {
+    ///
+    /// When `preserveFailedWhenIdle` is true, an existing `.failed` status is
+    /// kept if the surface currently appears idle. This avoids transient
+    /// callback ordering from clearing a recent failure, while still allowing
+    /// `.failed -> .active` promotion when a new command starts.
+    func refreshStatusFromSurface(preserveFailedWhenIdle: Bool = false) {
         guard let surface = surface else { return }
         let needsConfirm = ghostty_surface_needs_confirm_quit(surface)
+        if preserveFailedWhenIdle && !needsConfirm && terminal.terminalStatus == .failed {
+            return
+        }
         terminal.terminalStatus = needsConfirm ? .active : .idle
     }
 

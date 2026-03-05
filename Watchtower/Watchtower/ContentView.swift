@@ -82,6 +82,8 @@ struct ContentView: View {
                                         )
                                     }
                                     .id(pane.id)
+                                    .opacity(viewModel.pinnedPaneId == pane.id ? 0 : 1)
+                                    .allowsHitTesting(viewModel.pinnedPaneId != pane.id)
                                     .background(
                                         GeometryReader { paneGeo in
                                             Color.clear.preference(
@@ -92,8 +94,28 @@ struct ContentView: View {
                                     )
                                 }
                             }
+                            .padding(.leading, viewModel.pinnedLeadingInset(windowWidth: geometry.size.width))
                             .padding(10)
                             .frame(minWidth: viewModel.isFullScreen ? geometry.size.width : nil)
+                        }
+                        .overlay(alignment: .topLeading) {
+                            if let pinnedPane = viewModel.pinnedPane {
+                                FocusModeWrapper(
+                                    pane: pinnedPane,
+                                    viewModel: viewModel
+                                ) {
+                                    PaneWithHandle(
+                                        pane: pinnedPane,
+                                        allPanes: viewModel.panes,
+                                        viewModel: viewModel,
+                                        windowWidth: geometry.size.width
+                                    )
+                                }
+                                .padding(.leading, 20)
+                                .offset(y: 30)
+                                .frame(height: max(0, geometry.size.height - 60), alignment: .topLeading)
+                                .zIndex(1000)
+                            }
                         }
                         .coordinateSpace(name: "WindowSpace")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -602,6 +624,10 @@ struct PaneWithHandle: View {
     private var showLeftIndicator: Bool {
         guard let dropSlot = viewModel.dropTargetIndex else { return false }
 
+        if viewModel.isDropSlotBlocked(dropSlot) {
+            return false
+        }
+
         // External URL drag — always show if slot matches (never a no-op)
         if viewModel.showExternalDropIndicators {
             return index == 0 && dropSlot == 0
@@ -779,6 +805,12 @@ struct PaneDropDelegate: DropDelegate {
     func dropEntered(info: DropInfo) {
         guard !viewModel.isHandlingExternalDrop else { return }
         beginExternalDragIfNeeded(info, viewModel: viewModel)
+        guard !viewModel.isDropSlotBlocked(targetSlot) else {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                viewModel.dropTargetIndex = nil
+            }
+            return
+        }
         withAnimation(.easeInOut(duration: 0.15)) {
             viewModel.dropTargetIndex = targetSlot
         }
@@ -787,6 +819,10 @@ struct PaneDropDelegate: DropDelegate {
     func dropUpdated(info: DropInfo) -> DropProposal? {
         if viewModel.isHandlingExternalDrop { return externalAwareDropProposal(viewModel: viewModel) }
         beginExternalDragIfNeeded(info, viewModel: viewModel)
+        guard !viewModel.isDropSlotBlocked(targetSlot) else {
+            viewModel.dropTargetIndex = nil
+            return externalAwareDropProposal(viewModel: viewModel)
+        }
         viewModel.dropTargetIndex = targetSlot
         return externalAwareDropProposal(viewModel: viewModel)
     }
@@ -835,6 +871,12 @@ struct PaneSplitDropDelegate: DropDelegate {
         guard !viewModel.isHandlingExternalDrop else { return }
         beginExternalDragIfNeeded(info, viewModel: viewModel)
         let slot = slotForLocation(info)
+        guard !viewModel.isDropSlotBlocked(slot) else {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                viewModel.dropTargetIndex = nil
+            }
+            return
+        }
         withAnimation(.easeInOut(duration: 0.15)) {
             viewModel.dropTargetIndex = slot
         }
@@ -844,6 +886,14 @@ struct PaneSplitDropDelegate: DropDelegate {
         if viewModel.isHandlingExternalDrop { return externalAwareDropProposal(viewModel: viewModel) }
         beginExternalDragIfNeeded(info, viewModel: viewModel)
         let slot = slotForLocation(info)
+        guard !viewModel.isDropSlotBlocked(slot) else {
+            if viewModel.dropTargetIndex != nil {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    viewModel.dropTargetIndex = nil
+                }
+            }
+            return externalAwareDropProposal(viewModel: viewModel)
+        }
         if viewModel.dropTargetIndex != slot {
             withAnimation(.easeInOut(duration: 0.15)) {
                 viewModel.dropTargetIndex = slot
@@ -893,6 +943,11 @@ private func externalAwareDropProposal(viewModel: PaneContainerViewModel) -> Dro
 }
 
 private func performPaneOrExternalDrop(info: DropInfo, targetSlot: Int, viewModel: PaneContainerViewModel) -> Bool {
+    guard !viewModel.isDropSlotBlocked(targetSlot) else {
+        viewModel.cleanupDragState()
+        return false
+    }
+
     if let draggedId = viewModel.draggedPaneId {
         viewModel.movePane(id: draggedId, toSlot: targetSlot)
         viewModel.cleanupDragState()
@@ -1089,7 +1144,7 @@ struct WindowDropDelegate: DropDelegate {
     private func resolveEdgeSlot(for location: CGPoint) -> Int? {
         guard let range = paneRange() else { return 0 }
         if location.x < range.minX {
-            return 0
+            return viewModel.isDropSlotBlocked(0) ? nil : 0
         }
         if location.x > range.maxX {
             return viewModel.panes.count
@@ -1146,6 +1201,11 @@ struct WindowDropDelegate: DropDelegate {
         guard isExternalDrag else { return false }
         guard let slot = resolveEdgeSlot(for: info.location) else { return false }
 
+        guard !viewModel.isDropSlotBlocked(slot) else {
+            viewModel.cleanupDragState()
+            return false
+        }
+
         if loadURLFromDrop(info, completion: { url in
             viewModel.insertBrowser(url: url, atSlot: slot)
         }) {
@@ -1160,6 +1220,9 @@ struct WindowDropDelegate: DropDelegate {
 
 class PaneContainerViewModel: ObservableObject {
     @Published var panes: [PaneModel] = []
+
+    /// The pane currently pinned to the left edge, if any.
+    @Published var pinnedPaneId: UUID? = nil
 
     /// The index of the slot where a dragged pane would be inserted.
     /// `nil` when no drag is active. 0 = before first pane, 1 = between first and second, etc.
@@ -1241,6 +1304,18 @@ class PaneContainerViewModel: ObservableObject {
     /// Convenience: whether the browser find bar is currently visible.
     var isBrowserFindPresented: Bool {
         browserFindPaneId != nil
+    }
+
+    /// The pane currently pinned to the left edge.
+    var pinnedPane: PaneModel? {
+        guard let pinnedPaneId else { return nil }
+        return panes.first(where: { $0.id == pinnedPaneId })
+    }
+
+    /// Whether a specific drop slot is blocked due to pinning constraints.
+    /// Slot 0 (before first pane) is disallowed while any pane is pinned.
+    func isDropSlotBlocked(_ slot: Int) -> Bool {
+        pinnedPaneId != nil && slot == 0
     }
 
     /// Whether the window is in macOS native fullscreen mode.
@@ -1973,6 +2048,49 @@ class PaneContainerViewModel: ObservableObject {
         }
     }
 
+    /// Toggle pinning for the currently focused pane.
+    /// Pinning keeps one pane visually stuck to the left edge while
+    /// preserving its original position in the pane order.
+    func togglePinPane() {
+        guard let pane = contextualPane else { return }
+        if pinnedPaneId == pane.id {
+            pinnedPaneId = nil
+        } else {
+            pinnedPaneId = pane.id
+        }
+    }
+
+    /// Extra leading inset for the scrolling pane strip while a pane is
+    /// pinned to the left overlay. This prevents remaining panes from
+    /// sitting underneath the pinned pane when scrolled to the far left.
+    ///
+    /// Returns zero when no pane is pinned or when the pinned pane is
+    /// already the first pane in order (its hidden in-flow placeholder
+    /// already reserves the needed space).
+    func pinnedLeadingInset(windowWidth: CGFloat) -> CGFloat {
+        guard let pinnedPaneId,
+              let pinnedIndex = panes.firstIndex(where: { $0.id == pinnedPaneId }) else {
+            return 0
+        }
+
+        guard pinnedIndex > 0 else { return 0 }
+
+        let pane = panes[pinnedIndex]
+        let paneWidth: CGFloat
+        if pane.isCollapsed {
+            paneWidth = PaneModel.collapsedPaneWidth
+        } else if isFocusMode && pane.id == focusModePaneId {
+            paneWidth = max(pane.paneWidth, pane.focusModeMinWidth(windowWidth: windowWidth))
+        } else {
+            paneWidth = pane.paneWidth
+        }
+
+        let nextIsCollapsed = pinnedIndex + 1 < panes.count && panes[pinnedIndex + 1].isCollapsed
+        let rightGap: CGFloat = (draggedPaneId == nil && pane.isCollapsed && nextIsCollapsed) ? 15 : 27
+
+        return paneWidth + rightGap
+    }
+
     /// Collapse the currently focused pane (no-op if already collapsed).
     func collapsePane() {
         guard let pane = contextualPane, !pane.isCollapsed else { return }
@@ -2149,6 +2267,10 @@ class PaneContainerViewModel: ObservableObject {
             browserFindQuery = ""
         }
 
+        if pinnedPaneId == id {
+            pinnedPaneId = nil
+        }
+
         guard let index = panes.firstIndex(where: { $0.id == id }) else {
             NSLog("[CEF-CLOSE] removePane: pane %@ not found in array!", id.uuidString)
             return
@@ -2233,6 +2355,10 @@ class PaneContainerViewModel: ObservableObject {
         // Exit focus mode if the removed pane was the focus-mode target
         if id == focusModePaneId {
             exitFocusMode()
+        }
+
+        if id == pinnedPaneId {
+            pinnedPaneId = nil
         }
 
         // The close animation was already started in removePane(byId:).

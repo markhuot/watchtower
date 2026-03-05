@@ -61,13 +61,10 @@ struct PaneView: View {
     }
 
     /// The border color for the focus highlight, accounting for window activation state.
-    /// When `hasBell` is true, the border uses the theme's bright red (palette 9).
     /// When `pane.headerColor` is set, that color replaces the default highlight color.
     /// The `.animation` modifier on the parent handles the smooth transition.
     private var highlightBorderColor: Color {
-        if pane.hasBell {
-            return appManager.bellColor
-        } else if let custom = pane.headerColor {
+        if let custom = pane.headerColor {
             if isHighlightActive {
                 return custom
             } else if isHighlightDimmed {
@@ -89,9 +86,6 @@ struct PaneView: View {
         if pane.isCollapsed {
             return Color.clear  // no glow on collapsed panes — too narrow
         }
-        if pane.hasBell {
-            return appManager.bellColor.opacity(0.6)
-        }
         if let custom = pane.headerColor {
             if isHighlightActive {
                 return custom.opacity(0.6)
@@ -104,6 +98,14 @@ struct PaneView: View {
         } else {
             return Color.clear
         }
+    }
+
+    /// A subtle elevation shadow used for pinned panes.
+    private var pinnedShadowColor: Color {
+        if viewModel.pinnedPaneId == pane.id {
+            return Color.black.opacity(0.18)
+        }
+        return Color.clear
     }
 
     var body: some View {
@@ -263,6 +265,7 @@ struct PaneView: View {
                 )
                 .allowsHitTesting(false)
         )
+            .shadow(color: pinnedShadowColor, radius: 6, x: 0, y: 0)
         .opacity(pane.isDragging ? 0.5 : 1.0)
         .offset(x: shakeOffset)
         .animation(.easeInOut(duration: 0.15), value: pane.isFocused)
@@ -380,6 +383,9 @@ struct BrowserFindBarView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(borderColor, lineWidth: borderWidth)
         )
+        .onExitCommand {
+            viewModel.dismissBrowserFind()
+        }
         .onAppear {
             DispatchQueue.main.async {
                 isFindFieldFocused = true

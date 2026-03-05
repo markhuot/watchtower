@@ -346,14 +346,11 @@ class GhosttyAppManager: ObservableObject {
         DispatchQueue.main.async {
             view.updateTitle(title)
             // Title changes often coincide with a command starting (the
-            // shell updates the title to the running command).  Re-check
-            // the surface state so the status icon flips to .active when
-            // a long-running command begins.  We only promote to .active
-            // — never demote from .failed, which commandFinished owns.
-            let currentStatus = view.terminal.terminalStatus
-            if currentStatus != .failed {
-                view.refreshStatusFromSurface()
-            }
+            // shell updates the title to the running command). Re-check
+            // the surface state so the status icon can move directly from
+            // .failed to .active when a new command begins, while still
+            // preserving .failed if the surface is currently idle.
+            view.refreshStatusFromSurface(preserveFailedWhenIdle: true)
         }
         return true
     }
@@ -492,13 +489,10 @@ class GhosttyAppManager: ObservableObject {
         let pwd = String(cString: pwdPtr)
         DispatchQueue.main.async {
             view.terminal.terminalDirectory = pwd
-            // Don't overwrite .failed status — setPwd fires after
-            // commandFinished and would reset a failed command's red
-            // indicator back to green/idle.
-            let currentStatus = view.terminal.terminalStatus
-            if currentStatus != .failed {
-                view.refreshStatusFromSurface()
-            }
+            // setPwd can arrive after command-finished events. Preserve
+            // .failed when idle, but still allow .failed -> .active when
+            // a new foreground command starts.
+            view.refreshStatusFromSurface(preserveFailedWhenIdle: true)
         }
         return true
     }
