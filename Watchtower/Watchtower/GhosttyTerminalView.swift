@@ -93,13 +93,27 @@ struct GhosttyTerminalView: NSViewRepresentable {
     let terminal: TerminalPaneModel
     let size: CGSize
 
+    /// Keeps terminal NSViews alive across temporary SwiftUI re-parenting
+    /// (e.g. pinning into overlay) so the underlying Ghostty surface and
+    /// running process are not recreated.
+    private static var viewCache: [UUID: GhosttyTerminalNSView] = [:]
+
     func makeNSView(context: Context) -> GhosttyTerminalNSView {
+        if let cached = Self.viewCache[terminal.id] {
+            return cached
+        }
+
         let view = GhosttyTerminalNSView(model: terminal)
+        Self.viewCache[terminal.id] = view
         return view
     }
 
     func updateNSView(_ nsView: GhosttyTerminalNSView, context: Context) {
         nsView.sizeDidChange(size)
+    }
+
+    static func removeCachedView(for paneId: UUID) {
+        viewCache[paneId] = nil
     }
 }
 

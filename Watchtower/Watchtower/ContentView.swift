@@ -69,21 +69,20 @@ struct ContentView: View {
                     ScrollViewReader { scrollProxy in
                         ScrollView(.horizontal, showsIndicators: !viewModel.isFocusMode) {
                             HStack(spacing: 0) {
-                                ForEach(viewModel.panes) { pane in
+                                ForEach(viewModel.scrollablePanes) { pane in
                                     FocusModeWrapper(
                                         pane: pane,
                                         viewModel: viewModel
                                     ) {
                                         PaneWithHandle(
                                             pane: pane,
-                                            allPanes: viewModel.panes,
+                                            allPanes: viewModel.scrollablePanes,
                                             viewModel: viewModel,
-                                            windowWidth: geometry.size.width
+                                            windowWidth: geometry.size.width,
+                                            renderContent: true
                                         )
                                     }
                                     .id(pane.id)
-                                    .opacity(viewModel.pinnedPaneId == pane.id ? 0 : 1)
-                                    .allowsHitTesting(viewModel.pinnedPaneId != pane.id)
                                     .background(
                                         GeometryReader { paneGeo in
                                             Color.clear.preference(
@@ -106,9 +105,11 @@ struct ContentView: View {
                                 ) {
                                     PaneWithHandle(
                                         pane: pinnedPane,
-                                        allPanes: viewModel.panes,
+                                        allPanes: [pinnedPane],
                                         viewModel: viewModel,
-                                        windowWidth: geometry.size.width
+                                        windowWidth: geometry.size.width,
+                                        renderContent: true,
+                                        includeHandlesAndDropTargets: false
                                     )
                                 }
                                 .padding(.leading, 20)
@@ -127,7 +128,11 @@ struct ContentView: View {
                                 }
                                 DispatchQueue.main.async {
                                     withAnimation(.easeInOut(duration: 0.2)) {
-                                        scrollProxy.scrollTo(targetId)
+                                        if isPaneObscuredByPinnedOverlay(targetId, windowWidth: geometry.size.width) {
+                                            scrollProxy.scrollTo(targetId, anchor: .center)
+                                        } else {
+                                            scrollProxy.scrollTo(targetId)
+                                        }
                                     }
                                 }
                                 viewModel.focusedPaneId = nil
@@ -272,21 +277,47 @@ struct ContentView: View {
             }
         }
     }
+
+    private func isPaneObscuredByPinnedOverlay(_ paneId: UUID, windowWidth: CGFloat) -> Bool {
+        guard let pinnedPaneId = viewModel.pinnedPaneId,
+              pinnedPaneId != paneId,
+              let frame = paneFrames[paneId] else {
+            return false
+        }
+
+        let overlayTrailingEdge = 20 + viewModel.pinnedOverlayWidth(windowWidth: windowWidth)
+        return frame.minX < overlayTrailingEdge
+    }
 }
 
 struct TitlebarPaneStatusStrip: View {
     @ObservedObject var viewModel: PaneContainerViewModel
 
+    private var orderedPanes: [PaneModel] {
+        guard let pinnedId = viewModel.pinnedPaneId,
+              let pinnedPane = viewModel.panes.first(where: { $0.id == pinnedId }) else {
+            return viewModel.panes
+        }
+
+        return [pinnedPane] + viewModel.panes.filter { $0.id != pinnedId }
+    }
+
+    private func trailingPadding(for pane: PaneModel) -> CGFloat {
+        pane.id == viewModel.pinnedPaneId ? 8 : 0
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            ForEach(viewModel.panes) { pane in
+            ForEach(orderedPanes) { pane in
                 TitlebarPaneStatusDot(
                     pane: pane,
+                    isPinned: pane.id == viewModel.pinnedPaneId,
                     isSelected: viewModel.focusedPaneId == pane.id || pane.isFocused,
                     onTap: {
                         viewModel.focusPane(id: pane.id)
                     }
                 )
+                .padding(.trailing, trailingPadding(for: pane))
             }
         }
         .fixedSize()
@@ -359,6 +390,7 @@ final class TitlebarStatusInstallerNSView: NSView {
 struct TitlebarPaneStatusDot: View {
     @ObservedObject var pane: PaneModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
+    let isPinned: Bool
     let isSelected: Bool
     let onTap: () -> Void
 
@@ -366,9 +398,9 @@ struct TitlebarPaneStatusDot: View {
 
     private var helpText: String {
         if let subtitle = pane.subtitle, !subtitle.isEmpty {
-            return "\(pane.title)\n\(subtitle)"
+            return isPinned ? "📌 \(pane.title)\n\(subtitle)" : "\(pane.title)\n\(subtitle)"
         }
-        return pane.title
+        return isPinned ? "📌 \(pane.title)" : pane.title
     }
 
     private var statusColor: Color {
@@ -381,18 +413,28 @@ struct TitlebarPaneStatusDot: View {
 
     var body: some View {
         Button(action: onTap) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: dotSize, height: dotSize)
-                .shadow(
-                    color: statusColor.opacity(isSelected ? 1.0 : 0.4),
-                    radius: isSelected ? 5 : 3,
-                    x: 0,
-                    y: isSelected ? 1 : 0
-                )
-                .offset(y: bounceYOffset)
-                .animation(.spring(response: 0.34, dampingFraction: 0.7), value: isSelected)
-                .contentShape(Circle())
+            ZStack(alignment: .topTrailing) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: dotSize, height: dotSize)
+                    .shadow(
+                        color: statusColor.opacity(isSelected ? 1.0 : 0.4),
+                        radius: isSelected ? 5 : 3,
+                        x: 0,
+                        y: isSelected ? 1 : 0
+                    )
+
+                if isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.95))
+                        .shadow(color: .black.opacity(0.35), radius: 1, x: 0, y: 0)
+                        .offset(x: 4, y: -4)
+                }
+            }
+            .offset(y: bounceYOffset)
+            .animation(.spring(response: 0.34, dampingFraction: 0.7), value: isSelected)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
             .background(Color.clear)
@@ -558,6 +600,8 @@ struct PaneWithHandle: View {
     let allPanes: [PaneModel]
     @ObservedObject var viewModel: PaneContainerViewModel
     let windowWidth: CGFloat
+    let renderContent: Bool
+    var includeHandlesAndDropTargets: Bool = true
     @State private var closingFrozenContentWidth: CGFloat? = nil
 
     /// The absolute X position of the mouse in window coordinates when the drag started,
@@ -576,6 +620,13 @@ struct PaneWithHandle: View {
     /// When collapsed, the pane shrinks to a narrow strip.
     /// When this pane is the focus-mode target the pane content itself
     /// expands to the focus-mode minimum (which varies by pane type).
+    private var isPinnedPlaceholder: Bool {
+        !renderContent && viewModel.pinnedPaneId == pane.id
+    }
+
+    /// Width of the in-flow marker shown where a pinned pane will return.
+    private static let pinnedMarkerWidth: CGFloat = 1
+
     private var baseWidth: CGFloat {
         if pane.isCollapsed {
             return PaneModel.collapsedPaneWidth
@@ -588,7 +639,10 @@ struct PaneWithHandle: View {
     }
 
     private var effectiveWidth: CGFloat {
-        pane.isClosing ? 0 : baseWidth
+        if isPinnedPlaceholder {
+            return Self.pinnedMarkerWidth
+        }
+        return pane.isClosing ? 0 : baseWidth
     }
 
     /// Standard gap width between panes (3px indicator + 12px padding each side).
@@ -607,6 +661,9 @@ struct PaneWithHandle: View {
     /// to reduce visual clutter. During a drag reorder the gaps expand back
     /// to full width so drop targets are easy to hit.
     private var rightGapWidth: CGFloat {
+        if isPinnedPlaceholder {
+            return 0
+        }
         if pane.isClosing {
             return 0
         }
@@ -666,40 +723,50 @@ struct PaneWithHandle: View {
     var body: some View {
         HStack(spacing: 0) {
             // Left drop indicator (only for the first pane)
-            if index == 0 {
+            if includeHandlesAndDropTargets && index == 0 {
                 DropIndicatorView(isActive: showLeftIndicator, targetSlot: 0, viewModel: viewModel)
             }
 
-            PaneView(pane: pane, viewModel: viewModel, fixedContentWidth: closingFrozenContentWidth, onClose: {
-                    viewModel.removePane(byId: pane.id)
-                }, onDragStarted: {
-                    viewModel.dragStarted(paneId: pane.id)
-                }, onDragEnded: {
-                    viewModel.cleanupDragState()
-                }, onHeaderTapped: {
-                    viewModel.focusPane(id: pane.id)
-                }, onHeaderDoubleTapped: {
-                    if pane.isCollapsed {
+            Group {
+                if renderContent {
+                    PaneView(pane: pane, viewModel: viewModel, fixedContentWidth: closingFrozenContentWidth, onClose: {
+                        viewModel.removePane(byId: pane.id)
+                    }, onDragStarted: {
+                        viewModel.dragStarted(paneId: pane.id)
+                    }, onDragEnded: {
+                        viewModel.cleanupDragState()
+                    }, onHeaderTapped: {
                         viewModel.focusPane(id: pane.id)
-                    }
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        pane.isCollapsed.toggle()
-                    }
-                })
+                    }, onHeaderDoubleTapped: {
+                        if pane.isCollapsed {
+                            viewModel.focusPane(id: pane.id)
+                        }
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            pane.isCollapsed.toggle()
+                        }
+                    })
+                } else {
+                    Color.clear
+                        .overlay {
+                            if isPinnedPlaceholder {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.28))
+                                    .frame(width: Self.pinnedMarkerWidth)
+                                    .padding(.vertical, 8)
+                            }
+                        }
+                }
+            }
+                .allowsHitTesting(renderContent)
                 .frame(width: effectiveWidth)
                 .animation(nil, value: pane.paneWidth)
                 .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
                 .animation(.easeIn(duration: pane.animationDuration), value: pane.isClosing)
-                .onDrop(of: [.text, .url, .fileURL, weblocUTType], delegate: PaneSplitDropDelegate(
-                    paneIndex: index,
-                    paneWidth: pane.paneWidth,
-                    viewModel: viewModel
-                ))
                 .overlay {
                     // During internal pane reorder drags, install a top-most
                     // drop target so embedded NSViews (WKWebView/CEF) can't
                     // swallow drag events as the cursor moves across content.
-                    if viewModel.draggedPaneId != nil {
+                    if includeHandlesAndDropTargets && viewModel.draggedPaneId != nil {
                         Color.clear
                             .contentShape(Rectangle())
                             .onDrop(of: [.text, .url, .fileURL, weblocUTType], delegate: PaneSplitDropDelegate(
@@ -710,10 +777,21 @@ struct PaneWithHandle: View {
                     }
                 }
 
+            if includeHandlesAndDropTargets {
+                Color.clear
+                    .frame(width: 0)
+                    .onDrop(of: [.text, .url, .fileURL, weblocUTType], delegate: PaneSplitDropDelegate(
+                        paneIndex: index,
+                        paneWidth: pane.paneWidth,
+                        viewModel: viewModel
+                    ))
+            }
+
             // Gap between panes: drop indicator overlaid with a full-width resize handle.
             // The resize handle's hit area covers the entire gap so dragging can start
             // right at the pane edge.
-            ZStack {
+            if includeHandlesAndDropTargets {
+                ZStack {
                 // Drop indicator (visual only — the resize gesture on top takes priority)
                 DropIndicatorView(isActive: showRightIndicator, targetSlot: index + 1, viewModel: viewModel)
 
@@ -756,9 +834,10 @@ struct PaneWithHandle: View {
                                 dragAnchor = nil
                             }
                     )
+                }
+                .frame(width: rightGapWidth)
+                .animation(.easeInOut(duration: pane.isClosing ? pane.animationDuration : 0.2), value: rightGapWidth)
             }
-            .frame(width: rightGapWidth)
-            .animation(.easeInOut(duration: pane.isClosing ? pane.animationDuration : 0.2), value: rightGapWidth)
         }
         .onChange(of: pane.isClosing) { isClosing in
             if isClosing {
@@ -949,13 +1028,15 @@ private func performPaneOrExternalDrop(info: DropInfo, targetSlot: Int, viewMode
     }
 
     if let draggedId = viewModel.draggedPaneId {
-        viewModel.movePane(id: draggedId, toSlot: targetSlot)
+        let scrollableSlot = viewModel.scrollableSlot(fromVisibleSlot: targetSlot)
+        viewModel.movePane(id: draggedId, toSlot: scrollableSlot)
         viewModel.cleanupDragState()
         return true
     }
 
     if loadURLFromDrop(info, completion: { url in
-        viewModel.insertBrowser(url: url, atSlot: targetSlot)
+        let scrollableSlot = viewModel.scrollableSlot(fromVisibleSlot: targetSlot)
+        viewModel.insertBrowser(url: url, atSlot: scrollableSlot)
     }) {
         markExternalDropAccepted(viewModel)
         return true
@@ -1207,7 +1288,8 @@ struct WindowDropDelegate: DropDelegate {
         }
 
         if loadURLFromDrop(info, completion: { url in
-            viewModel.insertBrowser(url: url, atSlot: slot)
+            let scrollableSlot = viewModel.scrollableSlot(fromVisibleSlot: slot)
+            viewModel.insertBrowser(url: url, atSlot: scrollableSlot)
         }) {
             markExternalDropAccepted(viewModel)
             return true
@@ -1312,10 +1394,40 @@ class PaneContainerViewModel: ObservableObject {
         return panes.first(where: { $0.id == pinnedPaneId })
     }
 
+    /// Panes that remain in the horizontal scroll strip (excludes pinned pane).
+    var scrollablePanes: [PaneModel] {
+        guard let pinnedPaneId else { return panes }
+        return panes.filter { $0.id != pinnedPaneId }
+    }
+
     /// Whether a specific drop slot is blocked due to pinning constraints.
     /// Slot 0 (before first pane) is disallowed while any pane is pinned.
     func isDropSlotBlocked(_ slot: Int) -> Bool {
         pinnedPaneId != nil && slot == 0
+    }
+
+    /// Convert a slot index from the visible scroll-strip coordinate space
+    /// (which excludes the pinned pane) to the underlying `panes` array slot.
+    func scrollableSlot(fromVisibleSlot visibleSlot: Int) -> Int {
+        let clampedVisibleSlot = max(0, min(visibleSlot, scrollablePanes.count))
+
+        guard let pinnedPaneId,
+              let pinnedIndex = panes.firstIndex(where: { $0.id == pinnedPaneId }) else {
+            return clampedVisibleSlot
+        }
+
+        var seenScrollable = 0
+        for candidateSlot in 0...panes.count {
+            if candidateSlot == pinnedIndex {
+                continue
+            }
+            if seenScrollable == clampedVisibleSlot {
+                return candidateSlot
+            }
+            seenScrollable += 1
+        }
+
+        return panes.count
     }
 
     /// Whether the window is in macOS native fullscreen mode.
@@ -2073,7 +2185,30 @@ class PaneContainerViewModel: ObservableObject {
             return 0
         }
 
-        guard pinnedIndex > 0 else { return 0 }
+        let pane = panes[pinnedIndex]
+        let paneWidth: CGFloat
+        if pane.isCollapsed {
+            paneWidth = PaneModel.collapsedPaneWidth
+        } else if isFocusMode && pane.id == focusModePaneId {
+            paneWidth = max(pane.paneWidth, pane.focusModeMinWidth(windowWidth: windowWidth))
+        } else {
+            paneWidth = pane.paneWidth
+        }
+
+        let nextIsCollapsed = pinnedIndex + 1 < panes.count && panes[pinnedIndex + 1].isCollapsed
+        let rightGap: CGFloat = (draggedPaneId == nil && pane.isCollapsed && nextIsCollapsed) ? 15 : 27
+
+        return paneWidth + rightGap
+    }
+
+    /// Width of the pinned overlay pane plus its trailing inter-pane gap.
+    /// Used by reveal-scrolling logic to detect when a focused pane is
+    /// still sitting underneath the pinned overlay.
+    func pinnedOverlayWidth(windowWidth: CGFloat) -> CGFloat {
+        guard let pinnedPaneId,
+              let pinnedIndex = panes.firstIndex(where: { $0.id == pinnedPaneId }) else {
+            return 0
+        }
 
         let pane = panes[pinnedIndex]
         let paneWidth: CGFloat
@@ -2315,6 +2450,7 @@ class PaneContainerViewModel: ObservableObject {
         }
 
         NSLog("[CEF-CLOSE] removePane: removing non-Chromium pane %@ at index %d", id.uuidString, index)
+        let closingIsBrowser = panes[index] is BrowserPaneModel
 
         // Start close animation, then remove after it completes
         withAnimation(.easeIn(duration: duration)) {
@@ -2322,17 +2458,27 @@ class PaneContainerViewModel: ObservableObject {
         }
 
         // Focus neighbor immediately so the user isn't left on the dying pane
+        var preferredNeighborId: UUID? = nil
         if panes.count > 1 {
             let focusIndex = index > 0 ? index - 1 : 1
-            focusPaneById(panes[focusIndex].id)
+            let neighborId = panes[focusIndex].id
+            preferredNeighborId = neighborId
+            focusPaneById(neighborId)
+            if closingIsBrowser {
+                scheduleFocusReassertion(preferredPaneId: neighborId)
+            }
         }
 
         // Remove the pane from the array after the animation finishes
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
             guard let self = self else { return }
             guard let removeIndex = self.panes.firstIndex(where: { $0.id == id }) else { return }
+            GhosttyTerminalView.removeCachedView(for: id)
             withAnimation(.easeInOut(duration: duration)) {
                 self.panes.remove(at: removeIndex)
+            }
+            if closingIsBrowser {
+                self.scheduleFocusReassertion(preferredPaneId: preferredNeighborId)
             }
         }
     }
@@ -2370,12 +2516,15 @@ class PaneContainerViewModel: ObservableObject {
             let focusIndex = index > 0 ? index - 1 : 1
             let neighborId = panes[focusIndex].id
             NSLog("[CEF-CLOSE] finishRemovingCEFPane: removing pane at index %d, focusing %@", index, neighborId.uuidString)
+            GhosttyTerminalView.removeCachedView(for: id)
             withAnimation(.easeInOut(duration: duration)) {
                 panes.remove(at: index)
             }
             focusPaneById(neighborId)
+            scheduleFocusReassertion(preferredPaneId: neighborId)
         } else {
             NSLog("[CEF-CLOSE] finishRemovingCEFPane: removing last pane at index %d", index)
+            GhosttyTerminalView.removeCachedView(for: id)
             withAnimation(.easeInOut(duration: duration)) {
                 panes.remove(at: index)
             }
@@ -2385,28 +2534,48 @@ class PaneContainerViewModel: ObservableObject {
 
     func focusPreviousPane() {
         let currentPane = contextualPane
-        guard panes.count > 1 else { return }
+        let focusablePanes = keyboardNavigablePanes
+        guard !focusablePanes.isEmpty else { return }
+
         let currentIndex: Int
-        if let p = currentPane, let idx = panes.firstIndex(where: { $0.id == p.id }) {
+        if let p = currentPane, let idx = focusablePanes.firstIndex(where: { $0.id == p.id }) {
             currentIndex = idx
         } else {
             currentIndex = 0
         }
-        let newIndex = (currentIndex - 1 + panes.count) % panes.count
-        focusPane(panes[newIndex])
+
+        let newIndex = (currentIndex - 1 + focusablePanes.count) % focusablePanes.count
+        let targetPane = focusablePanes[newIndex]
+        focusPane(targetPane)
+
+        // When wrapping with a pinned overlay active, minimal reveal can leave
+        // the destination pane partially hidden behind the pinned area.
+        if pinnedPaneId != nil, currentIndex == 0, newIndex == focusablePanes.count - 1 {
+            requestCenteredScroll(to: targetPane.id)
+        }
     }
 
     func focusNextPane() {
         let currentPane = contextualPane
-        guard panes.count > 1 else { return }
+        let focusablePanes = keyboardNavigablePanes
+        guard !focusablePanes.isEmpty else { return }
+
         let currentIndex: Int
-        if let p = currentPane, let idx = panes.firstIndex(where: { $0.id == p.id }) {
+        if let p = currentPane, let idx = focusablePanes.firstIndex(where: { $0.id == p.id }) {
             currentIndex = idx
         } else {
             currentIndex = 0
         }
-        let newIndex = (currentIndex + 1) % panes.count
-        focusPane(panes[newIndex])
+
+        let newIndex = (currentIndex + 1) % focusablePanes.count
+        let targetPane = focusablePanes[newIndex]
+        focusPane(targetPane)
+
+        // When wrapping with a pinned overlay active, minimal reveal can leave
+        // the destination pane partially hidden behind the pinned area.
+        if pinnedPaneId != nil, currentIndex == focusablePanes.count - 1, newIndex == 0 {
+            requestCenteredScroll(to: targetPane.id)
+        }
     }
 
     /// Swap the focused pane one position to the left (wrapping around).
@@ -2481,6 +2650,14 @@ class PaneContainerViewModel: ObservableObject {
     func focusPane(id: UUID) {
         guard let pane = panes.first(where: { $0.id == id }) else { return }
         focusPane(pane)
+    }
+
+    /// Panes that participate in keyboard focus cycling.
+    /// A pinned pane is intentionally skipped so Cmd+Shift+[ / ]
+    /// cycles only through the scrolling pane strip.
+    private var keyboardNavigablePanes: [PaneModel] {
+        guard let pinnedPaneId else { return panes }
+        return panes.filter { $0.id != pinnedPaneId }
     }
 
     /// Focus a pane. If the NSView is already in the hierarchy, focus it
@@ -2558,6 +2735,31 @@ class PaneContainerViewModel: ObservableObject {
         focusPane(pane)
     }
 
+    /// Browser teardown can temporarily drop first-responder ownership while
+    /// AppKit and SwiftUI dismantle the closing WKWebView/CEF view hierarchy.
+    /// Reassert focus over the next two run-loop turns so a pane is never left
+    /// unfocused after rapid close actions.
+    private func scheduleFocusReassertion(preferredPaneId: UUID?) {
+        DispatchQueue.main.async { [weak self] in
+            self?.reassertPaneFocusIfNeeded(preferredPaneId: preferredPaneId)
+            DispatchQueue.main.async { [weak self] in
+                self?.reassertPaneFocusIfNeeded(preferredPaneId: preferredPaneId)
+            }
+        }
+    }
+
+    private func reassertPaneFocusIfNeeded(preferredPaneId: UUID?) {
+        guard !panes.isEmpty else { return }
+        if contextualPane != nil { return }
+
+        if let preferredPaneId,
+           panes.contains(where: { $0.id == preferredPaneId }) {
+            focusPaneById(preferredPaneId)
+        } else {
+            focusPane(panes[0])
+        }
+    }
+
     /// Try to find the pane's NSView in the hierarchy and make it first
     /// responder. Returns true if successful.
     @discardableResult
@@ -2570,13 +2772,11 @@ class PaneContainerViewModel: ObservableObject {
         if pane is TerminalPaneModel {
             let allViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
             if let targetView = allViews.first(where: { $0.terminal.id == pane.id }) {
-                window.makeFirstResponder(targetView)
-                return true
+                return window.makeFirstResponder(targetView)
             }
         } else if pane is BrowserPaneModel {
             if let engineView = findBrowserEngineView(for: pane.id, in: contentView) {
-                window.makeFirstResponder(engineView)
-                return true
+                return window.makeFirstResponder(engineView)
             }
         }
         return false

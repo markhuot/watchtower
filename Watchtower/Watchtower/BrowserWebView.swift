@@ -342,10 +342,27 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
         if let pending = browser?.viewModel?.pendingFocus,
            pending.paneId == browser?.id,
            pending.fulfill() {
-            browser?.viewModel?.pendingFocus = nil
             DispatchQueue.main.async { [weak self] in
-                guard let self = self, let window = self.window else { return }
-                window.makeFirstResponder(self)
+                guard let self = self,
+                      let window = self.window,
+                      let browser = self.browser,
+                      let vm = browser.viewModel else { return }
+
+                // Keep pendingFocus set through makeFirstResponder so
+                // canClaimFocusNow() allows this deferred claim.
+                let didFocus = window.makeFirstResponder(self)
+                if !didFocus {
+                    // One more run-loop later catches occasional responder
+                    // transitions while SwiftUI/AppKit finishes mounting.
+                    DispatchQueue.main.async {
+                        _ = window.makeFirstResponder(self)
+                        if vm.pendingFocus?.paneId == browser.id {
+                            vm.pendingFocus = nil
+                        }
+                    }
+                } else if vm.pendingFocus?.paneId == browser.id {
+                    vm.pendingFocus = nil
+                }
             }
         }
     }
