@@ -60,6 +60,7 @@ func isWatchtowerAppShortcut(_ event: NSEvent) -> Bool {
     case ([.command], "t"):                return true  // New Pane
     case ([.command, .shift], "t"):        return true  // New Terminal
     case ([.command, .shift], "b"):        return true  // New Browser
+    case ([.command], "w"):                return true  // Close Pane / Window
 
     // Command palette
     case ([.command, .shift], "p"):        return true  // Toggle Command Palette

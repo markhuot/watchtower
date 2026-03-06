@@ -36,6 +36,16 @@ struct WatchtowerApp: App {
                 }
                 .keyboardShortcut("t", modifiers: [.command])
 
+                Button("Close Pane") {
+                    if let viewModel = activeViewModel,
+                       viewModel.contextualPane != nil {
+                        viewModel.closeCurrentPane()
+                    } else {
+                        NSApp.keyWindow?.performClose(nil)
+                    }
+                }
+                .keyboardShortcut("w", modifiers: [.command])
+
                 Button("New Terminal") {
                     if let vm = activeViewModel {
                         let terminal = vm.addTerminal()

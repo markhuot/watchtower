@@ -97,6 +97,7 @@ struct ContentView: View {
                             .padding(10)
                             .frame(minWidth: viewModel.isFullScreen ? geometry.size.width : nil)
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .overlay(alignment: .topLeading) {
                             if let pinnedPane = viewModel.pinnedPane {
                                 FocusModeWrapper(
@@ -119,7 +120,6 @@ struct ContentView: View {
                             }
                         }
                         .coordinateSpace(name: "WindowSpace")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .onChange(of: viewModel.focusedPaneId) { targetId in
                             guard let targetId = targetId else { return }
                             DispatchQueue.main.async {
@@ -426,7 +426,7 @@ struct TitlebarPaneStatusDot: View {
 
                 if isPinned {
                     Image(systemName: "pin.fill")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(.white.opacity(0.95))
                         .shadow(color: .black.opacity(0.35), radius: 1, x: 0, y: 0)
                         .offset(x: 4, y: -4)
@@ -2573,7 +2573,9 @@ class PaneContainerViewModel: ObservableObject {
 
         // When wrapping with a pinned overlay active, minimal reveal can leave
         // the destination pane partially hidden behind the pinned area.
-        if pinnedPaneId != nil, currentIndex == focusablePanes.count - 1, newIndex == 0 {
+        // Wrapping to index 0 is only problematic when index 0 is a scrolling
+        // pane (i.e. no pinned pane).
+        if pinnedPaneId == nil, currentIndex == focusablePanes.count - 1, newIndex == 0 {
             requestCenteredScroll(to: targetPane.id)
         }
     }
@@ -2653,11 +2655,14 @@ class PaneContainerViewModel: ObservableObject {
     }
 
     /// Panes that participate in keyboard focus cycling.
-    /// A pinned pane is intentionally skipped so Cmd+Shift+[ / ]
-    /// cycles only through the scrolling pane strip.
+    /// If a pane is pinned, treat it as the first pane in the cycle.
     private var keyboardNavigablePanes: [PaneModel] {
-        guard let pinnedPaneId else { return panes }
-        return panes.filter { $0.id != pinnedPaneId }
+        guard let pinnedPaneId,
+              let pinnedPane = panes.first(where: { $0.id == pinnedPaneId }) else {
+            return panes
+        }
+
+        return [pinnedPane] + panes.filter { $0.id != pinnedPaneId }
     }
 
     /// Focus a pane. If the NSView is already in the hierarchy, focus it
