@@ -47,6 +47,11 @@ struct PaneView: View {
         viewModel.browserFindPaneId == pane.id
     }
 
+    /// Whether the terminal find bar is open on this pane.
+    private var isTerminalFindOpenHere: Bool {
+        viewModel.terminalFindPaneId == pane.id
+    }
+
     /// Whether the highlight should be shown at full intensity.
     /// True only when the pane is focused AND the window is the key window
     /// AND the command palette is NOT open (palette draws its own outline).
@@ -249,6 +254,20 @@ struct PaneView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+
+            // Floating terminal find bar (Cmd+F / Cmd+G)
+            if let terminal = pane as? TerminalPaneModel,
+               isTerminalFindOpenHere,
+               !pane.isCollapsed {
+                TerminalFindBarView(
+                    terminal: terminal,
+                    viewModel: viewModel
+                )
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
             .frame(width: fixedContentWidth, alignment: .leading)
         .background(appManager.backgroundColor)
@@ -275,6 +294,7 @@ struct PaneView: View {
         .animation(.easeInOut(duration: 0.15), value: pane.headerColor)
         .animation(.easeOut(duration: 0.15), value: viewModel.commandPalettePaneId)
         .animation(.easeOut(duration: 0.15), value: viewModel.browserFindPaneId)
+        .animation(.easeOut(duration: 0.15), value: viewModel.terminalFindPaneId)
         .animation(.easeInOut(duration: 0.2), value: pane.isCollapsed)
         .animation(.easeInOut(duration: 0.2), value: (pane as? TerminalPaneModel)?.toast)
         .onChange(of: pane.bellEventToken) { _ in
@@ -405,6 +425,100 @@ struct BrowserFindBarView: View {
 
     private func findPrevious() {
         viewModel.findPreviousInBrowser()
+    }
+}
+
+struct TerminalFindBarView: View {
+    @ObservedObject var terminal: TerminalPaneModel
+    @ObservedObject var viewModel: PaneContainerViewModel
+    @ObservedObject private var appManager = GhosttyAppManager.shared
+    @FocusState private var isFindFieldFocused: Bool
+
+    private var findBinding: Binding<String> {
+        Binding(
+            get: { viewModel.terminalFindQuery },
+            set: { viewModel.updateTerminalFindQuery($0) }
+        )
+    }
+
+    private var isQueryEmpty: Bool {
+        viewModel.terminalFindQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var borderColor: Color {
+        if isFindFieldFocused {
+            return appManager.highlightColor.opacity(0.55)
+        }
+        return appManager.foregroundColor.opacity(0.22)
+    }
+
+    private var borderWidth: CGFloat {
+        isFindFieldFocused ? 2 : 1
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Find in terminal", text: findBinding)
+                .textFieldStyle(.roundedBorder)
+                .focused($isFindFieldFocused)
+                .onSubmit {
+                    findNext()
+                }
+
+            Button("Next") {
+                findNext()
+            }
+            .buttonStyle(.bordered)
+            .keyboardShortcut(.return, modifiers: [])
+            .disabled(isQueryEmpty)
+
+            Button("Previous") {
+                findPrevious()
+            }
+            .buttonStyle(.bordered)
+            .keyboardShortcut(.return, modifiers: [.shift])
+            .disabled(isQueryEmpty)
+
+            Button {
+                viewModel.dismissTerminalFind()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Close Find")
+        }
+        .padding(8)
+        .frame(maxWidth: 430)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(appManager.backgroundColor.opacity(0.96))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(borderColor, lineWidth: borderWidth)
+        )
+        .onExitCommand {
+            viewModel.dismissTerminalFind()
+        }
+        .onAppear {
+            DispatchQueue.main.async {
+                isFindFieldFocused = true
+            }
+        }
+        .onChange(of: viewModel.terminalFindFocusToken) { _ in
+            guard viewModel.terminalFindPaneId == terminal.id else { return }
+            DispatchQueue.main.async {
+                isFindFieldFocused = true
+            }
+        }
+    }
+
+    private func findNext() {
+        viewModel.findNextInTerminal()
+    }
+
+    private func findPrevious() {
+        viewModel.findPreviousInTerminal()
     }
 }
 

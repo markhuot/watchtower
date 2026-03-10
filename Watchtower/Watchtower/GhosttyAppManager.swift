@@ -768,7 +768,7 @@ class GhosttyAppManager: ObservableObject {
         v: ghostty_action_renderer_health_e
     ) -> Bool {
         // Log renderer health issues
-        if v != GHOSTTY_RENDERER_HEALTH_OK {
+        if v != GHOSTTY_RENDERER_HEALTH_HEALTHY {
             logger.warning("Renderer health issue: \(v.rawValue)")
         }
         return true

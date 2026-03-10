@@ -127,6 +127,10 @@ struct WatchtowerApp: App {
 
                 // Browser navigation commands — disabled when focused pane is not a browser
                 let isBrowserFocused = activeViewModel?.contextualPane is BrowserPaneModel
+                let canFindInFocusedPane = {
+                    guard let pane = activeViewModel?.contextualPane else { return false }
+                    return pane is BrowserPaneModel || pane is TerminalPaneModel
+                }()
 
                 Button("Go Back") {
                     if let browser = activeViewModel?.contextualPane as? BrowserPaneModel {
@@ -161,22 +165,22 @@ struct WatchtowerApp: App {
                 Divider()
 
                 Button("Find on Page") {
-                    activeViewModel?.openBrowserFind()
+                    activeViewModel?.openFindInContext()
                 }
                 .keyboardShortcut("f", modifiers: [.command])
-                .disabled(!isBrowserFocused)
+                .disabled(!canFindInFocusedPane)
 
                 Button("Find Next") {
-                    activeViewModel?.findNextInBrowser()
+                    activeViewModel?.findNextInContext()
                 }
                 .keyboardShortcut("g", modifiers: [.command])
-                .disabled(!isBrowserFocused)
+                .disabled(!canFindInFocusedPane)
 
                 Button("Find Previous") {
-                    activeViewModel?.findPreviousInBrowser()
+                    activeViewModel?.findPreviousInContext()
                 }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(!isBrowserFocused)
+                .disabled(!canFindInFocusedPane)
             }
         }
 
@@ -332,27 +336,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return nil
             }
 
-            if self.isBrowserFindShortcut(event),
+            if self.isFindShortcut(event),
                let browser,
                let viewModel = browser.viewModel {
-                shortcutLogger.debug("Handling browser find shortcut")
-                viewModel.openBrowserFind()
+                shortcutLogger.debug("Handling find shortcut")
+                viewModel.openFindInContext()
                 return nil
             }
 
-            if self.isBrowserFindNextShortcut(event),
+            if self.isFindNextShortcut(event),
                let browser,
                let viewModel = browser.viewModel {
-                shortcutLogger.debug("Handling browser find-next shortcut")
-                viewModel.findNextInBrowser()
+                shortcutLogger.debug("Handling find-next shortcut")
+                viewModel.findNextInContext()
                 return nil
             }
 
-            if self.isBrowserFindPreviousShortcut(event),
+            if self.isFindPreviousShortcut(event),
                let browser,
                let viewModel = browser.viewModel {
-                shortcutLogger.debug("Handling browser find-previous shortcut")
-                viewModel.findPreviousInBrowser()
+                shortcutLogger.debug("Handling find-previous shortcut")
+                viewModel.findPreviousInContext()
                 return nil
             }
 
@@ -450,7 +454,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return chars == "i"
     }
 
-    private func isBrowserFindShortcut(_ event: NSEvent) -> Bool {
+    private func isFindShortcut(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .subtracting([.capsLock])
@@ -460,7 +464,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return chars == "f"
     }
 
-    private func isBrowserFindNextShortcut(_ event: NSEvent) -> Bool {
+    private func isFindNextShortcut(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .subtracting([.capsLock])
@@ -470,7 +474,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return chars == "g"
     }
 
-    private func isBrowserFindPreviousShortcut(_ event: NSEvent) -> Bool {
+    private func isFindPreviousShortcut(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .subtracting([.capsLock])

@@ -1366,6 +1366,16 @@ class PaneContainerViewModel: ObservableObject {
     /// re-focus the text field on repeated Cmd+F presses.
     @Published var browserFindFocusToken: UInt = 0
 
+    /// The terminal pane ID hosting the floating find bar, or `nil` when hidden.
+    @Published var terminalFindPaneId: UUID? = nil
+
+    /// Current query text in the floating terminal find bar.
+    @Published var terminalFindQuery: String = ""
+
+    /// Incremented each time terminal find is explicitly opened so the bar can
+    /// re-focus the text field on repeated Cmd+F presses.
+    @Published var terminalFindFocusToken: UInt = 0
+
     /// When set, the next NSView matching this pane ID to enter the window
     /// hierarchy will claim first responder. Setting a new value automatically
     /// cancels the previous one via `didSet`, preventing races.
@@ -1386,6 +1396,11 @@ class PaneContainerViewModel: ObservableObject {
     /// Convenience: whether the browser find bar is currently visible.
     var isBrowserFindPresented: Bool {
         browserFindPaneId != nil
+    }
+
+    /// Convenience: whether the terminal find bar is currently visible.
+    var isTerminalFindPresented: Bool {
+        terminalFindPaneId != nil
     }
 
     /// The pane currently pinned to the left edge.
@@ -1795,6 +1810,44 @@ class PaneContainerViewModel: ObservableObject {
         focusPane(browser)
     }
 
+    /// Show the terminal find bar (Cmd+F) on the focused terminal pane and
+    /// focus its text field for immediate typing.
+    func openTerminalFind() {
+        guard let terminal = contextualPane as? TerminalPaneModel else { return }
+
+        if terminal.isCollapsed {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                terminal.isCollapsed = false
+            }
+        }
+
+        if terminalFindPaneId != terminal.id {
+            terminalFindPaneId = terminal.id
+            terminalFindQuery = ""
+        }
+        terminalFindFocusToken &+= 1
+        focusPane(terminal)
+    }
+
+    /// Open find for the currently focused pane type.
+    /// If a find bar is already open, this re-focuses its text field.
+    func openFindInContext() {
+        if isBrowserFindPresented {
+            browserFindFocusToken &+= 1
+            return
+        }
+        if isTerminalFindPresented {
+            terminalFindFocusToken &+= 1
+            return
+        }
+
+        if contextualPane is BrowserPaneModel {
+            openBrowserFind()
+        } else if contextualPane is TerminalPaneModel {
+            openTerminalFind()
+        }
+    }
+
     /// Update active browser find query and trigger a native find.
     func updateBrowserFindQuery(_ query: String) {
         browserFindQuery = query
@@ -1856,6 +1909,105 @@ class PaneContainerViewModel: ObservableObject {
         }
         browserFindPaneId = nil
         browserFindQuery = ""
+    }
+
+    /// Update active terminal find query and trigger Ghostty search.
+    func updateTerminalFindQuery(_ query: String) {
+        terminalFindQuery = query
+        guard let paneId = terminalFindPaneId,
+              let terminalView = findTerminalView(for: paneId) else {
+            return
+        }
+
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            terminalView.endSearch()
+        } else {
+            terminalView.search(query)
+        }
+    }
+
+    /// Jump to the next terminal find match for the current query (Cmd+G).
+    func findNextInTerminal() {
+        if !isTerminalFindPresented {
+            openTerminalFind()
+            return
+        }
+
+        guard let paneId = terminalFindPaneId,
+              let terminalView = findTerminalView(for: paneId) else {
+            return
+        }
+        guard !terminalFindQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            terminalFindFocusToken &+= 1
+            return
+        }
+
+        terminalView.navigateSearch(next: true)
+    }
+
+    /// Jump to the previous terminal find match for the current query (Shift+Cmd+G).
+    func findPreviousInTerminal() {
+        if !isTerminalFindPresented {
+            openTerminalFind()
+            return
+        }
+
+        guard let paneId = terminalFindPaneId,
+              let terminalView = findTerminalView(for: paneId) else {
+            return
+        }
+        guard !terminalFindQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            terminalFindFocusToken &+= 1
+            return
+        }
+
+        terminalView.navigateSearch(next: false)
+    }
+
+    /// Hide the terminal find bar and clear active terminal highlights.
+    func dismissTerminalFind() {
+        if let paneId = terminalFindPaneId,
+           let terminalView = findTerminalView(for: paneId) {
+            terminalView.endSearch()
+        }
+        terminalFindPaneId = nil
+        terminalFindQuery = ""
+    }
+
+    /// Jump to the next find match for whichever find bar is active.
+    func findNextInContext() {
+        if isBrowserFindPresented {
+            findNextInBrowser()
+            return
+        }
+        if isTerminalFindPresented {
+            findNextInTerminal()
+            return
+        }
+
+        if contextualPane is BrowserPaneModel {
+            openBrowserFind()
+        } else if contextualPane is TerminalPaneModel {
+            openTerminalFind()
+        }
+    }
+
+    /// Jump to the previous find match for whichever find bar is active.
+    func findPreviousInContext() {
+        if isBrowserFindPresented {
+            findPreviousInBrowser()
+            return
+        }
+        if isTerminalFindPresented {
+            findPreviousInTerminal()
+            return
+        }
+
+        if contextualPane is BrowserPaneModel {
+            openBrowserFind()
+        } else if contextualPane is TerminalPaneModel {
+            openTerminalFind()
+        }
     }
 
     /// Dismiss the command palette. If no `focusPane` call was made since
@@ -2402,6 +2554,11 @@ class PaneContainerViewModel: ObservableObject {
             browserFindQuery = ""
         }
 
+        if terminalFindPaneId == id {
+            terminalFindPaneId = nil
+            terminalFindQuery = ""
+        }
+
         if pinnedPaneId == id {
             pinnedPaneId = nil
         }
@@ -2682,6 +2839,10 @@ class PaneContainerViewModel: ObservableObject {
             dismissBrowserFind()
         }
 
+        if let findPaneId = terminalFindPaneId, findPaneId != pane.id {
+            dismissTerminalFind()
+        }
+
         // Explicitly clear isFocused on all other panes. Normally this is
         // handled by resignFirstResponder on the NSView, but when a pane is
         // collapsed its NSView has been removed from the hierarchy and
@@ -2800,6 +2961,18 @@ class PaneContainerViewModel: ObservableObject {
         for subview in view.subviews {
             if let found = findBrowserEngineView(for: paneId, in: subview) {
                 return found
+            }
+        }
+        return nil
+    }
+
+    /// Find a terminal NSView by pane ID across all app windows.
+    private func findTerminalView(for paneId: UUID) -> GhosttyTerminalNSView? {
+        for window in NSApp.windows {
+            guard let contentView = window.contentView else { continue }
+            let terminalViews = GhosttyTerminalNSView.findAllTerminalViews(in: contentView)
+            if let view = terminalViews.first(where: { $0.terminal.id == paneId }) {
+                return view
             }
         }
         return nil

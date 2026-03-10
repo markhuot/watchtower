@@ -841,6 +841,42 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         // Prevent NSBeep for unhandled commands
     }
 
+    // MARK: - Search
+
+    /// Start/update terminal search with the given query text.
+    func search(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            endSearch()
+            return
+        }
+
+        guard performBindingAction("start_search") else { return }
+
+        // Escape binding argument delimiters for Ghostty's binding parser.
+        let escaped = trimmed
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: ":", with: "\\:")
+        _ = performBindingAction("search:\(escaped)")
+    }
+
+    /// Navigate active search results.
+    func navigateSearch(next: Bool) {
+        let direction = next ? "next" : "previous"
+        _ = performBindingAction("navigate_search:\(direction)")
+    }
+
+    /// End active search and hide Ghostty search UI.
+    func endSearch() {
+        _ = performBindingAction("end_search")
+    }
+
+    @discardableResult
+    private func performBindingAction(_ action: String) -> Bool {
+        guard let surface else { return false }
+        return ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+    }
+
     // MARK: - View Hierarchy Helpers
 
     /// Recursively find all GhosttyTerminalNSView instances in a view hierarchy.
