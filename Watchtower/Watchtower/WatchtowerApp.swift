@@ -1,5 +1,7 @@
 import SwiftUI
 import os
+import AppKit
+import WebKit
 
 private let shortcutLogger = Logger(subsystem: "com.watchtower", category: "ShortcutRouting")
 
@@ -13,6 +15,7 @@ struct WatchtowerApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(ghosttyManager)
+                .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 1960, height: 1000)
         .commands {
@@ -60,6 +63,17 @@ struct WatchtowerApp: App {
                     }
                 }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
+            }
+
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Sidebar") {
+                    NSApp.sendAction(
+                        #selector(NSSplitViewController.toggleSidebar(_:)),
+                        to: nil,
+                        from: nil
+                    )
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
             }
 
             CommandGroup(after: .toolbar) {
@@ -162,6 +176,12 @@ struct WatchtowerApp: App {
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .disabled(!isBrowserFocused)
 
+                Button("Open WebKit Inspector Repro Window") {
+                    let targetURL = (activeViewModel?.contextualPane as? BrowserPaneModel)?.url
+                        ?? URL(string: "https://news.ycombinator.com/")!
+                    WebKitInspectorReproManager.shared.open(url: targetURL)
+                }
+
                 Divider()
 
                 Button("Find on Page") {
@@ -190,18 +210,12 @@ struct WatchtowerApp: App {
     }
 }
 
-import WebKit
-
 /// Walk the view hierarchy to find a BrowserEngineView associated with a pane ID.
 /// Checks for both WatchtowerWebView (WebKit) and ChromiumBrowserView (Chromium).
 func findBrowserEngineView(for paneId: UUID, in view: NSView) -> (any BrowserEngineView)? {
-    if let webView = view as? WatchtowerWebView,
-       webView.browser?.id == paneId {
-        return webView
-    }
-    if let chromiumView = view as? ChromiumBrowserView,
-       chromiumView.browser?.id == paneId {
-        return chromiumView
+    if let engineView = view as? any BrowserEngineView,
+       engineView.browser?.id == paneId {
+        return engineView
     }
     for subview in view.subviews {
         if let found = findBrowserEngineView(for: paneId, in: subview) {
@@ -213,13 +227,8 @@ func findBrowserEngineView(for paneId: UUID, in view: NSView) -> (any BrowserEng
 
 /// Find the currently focused browser model by walking a view hierarchy.
 func findFocusedBrowserModel(in view: NSView) -> BrowserPaneModel? {
-    if let webView = view as? WatchtowerWebView,
-       let browser = webView.browser,
-       browser.isFocused {
-        return browser
-    }
-    if let chromiumView = view as? ChromiumBrowserView,
-       let browser = chromiumView.browser,
+    if let engineView = view as? any BrowserEngineView,
+       let browser = engineView.browser,
        browser.isFocused {
         return browser
     }
@@ -233,6 +242,7 @@ func findFocusedBrowserModel(in view: NSView) -> BrowserPaneModel? {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var browserShortcutMonitor: Any?
+    private var appearanceObserver: NSKeyValueObservation?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Apply dark appearance before first window presentation to avoid
@@ -251,6 +261,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Start the IPC server for CLI communication.
         IPCServer.shared.start()
+
+        appearanceObserver = NSApplication.shared.observe(\ .effectiveAppearance, options: [.new, .initial]) { _, _ in
+            GhosttyAppManager.shared.syncColorScheme()
+        }
 
         // Observe terminate: calls that weren't explicitly flagged by our
         // Cmd-Q / menu handler.  This covers the Dock "Quit" menu item,
@@ -388,13 +402,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         var current: NSView? = responder
         while let view = current {
-            if let webView = view as? WatchtowerWebView {
-                shortcutLogger.debug("Resolved browser from first responder via WebKit")
-                return webView.browser
-            }
-            if let chromiumView = view as? ChromiumBrowserView {
-                shortcutLogger.debug("Resolved browser from first responder via Chromium")
-                return chromiumView.browser
+            if let engineView = view as? any BrowserEngineView {
+                shortcutLogger.debug("Resolved browser from first responder via BrowserEngineView")
+                return engineView.browser
             }
             current = view.superview
         }
@@ -492,102 +502,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureWindow(_ window: NSWindow) {
         window.title = "Watchtower"
-        window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = false
-        window.isMovableByWindowBackground = false
-        window.isOpaque = true
         if #available(macOS 11.0, *) {
-            window.titlebarSeparatorStyle = .none
             window.toolbarStyle = .unified
         }
-        window.toolbar?.showsBaselineSeparator = false
-        // Match the window background to the Ghostty terminal background.
-        // Keep a native, opaque titlebar so there is no initial white flash.
-        let bgColor = GhosttyAppManager.shared.backgroundColor
-        let nsColor = NSColor(bgColor)
-        window.backgroundColor = nsColor
-
-        // In native full screen macOS may move titlebar chrome into
-        // a separate private window. Apply the same color there too.
-        styleTitlebarContainer(for: window, color: nsColor)
-
-        // AppKit can lazily create titlebar subviews after initial window
-        // configuration; apply once more on the next run loop so the color
-        // stays exact and separators/materials remain hidden.
-        DispatchQueue.main.async { [weak window] in
-            guard let window else { return }
-            self.styleTitlebarContainer(for: window, color: nsColor)
-            if #available(macOS 11.0, *) {
-                window.titlebarSeparatorStyle = .none
-            }
-            window.toolbar?.showsBaselineSeparator = false
-        }
-
-        // Toolbar/principal item host views are often created lazily after
-        // initial window setup. Re-apply styling a few times to catch the
-        // final hierarchy and remove any rounded host background pills.
-        for delay in [0.05, 0.2, 0.5] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak window] in
-                guard let window else { return }
-                self.styleTitlebarContainer(for: window, color: nsColor)
-            }
-        }
-    }
-
-    /// Finds the titlebar container for the given window (normal or fullscreen)
-    /// and applies the background color to its layer.
-    private func styleTitlebarContainer(for window: NSWindow, color: NSColor) {
-        if let container = titlebarContainer(for: window) {
-            container.wantsLayer = true
-            container.layer?.backgroundColor = color.cgColor
-
-            // Remove titlebar/toolbar host chrome so custom principal views
-            // don't render on top of a rounded dark capsule.
-            for view in container.allDescendants() {
-                let className = String(describing: type(of: view))
-
-                if className == "NSTitlebarBackgroundView" || className == "NSVisualEffectView" {
-                    view.isHidden = true
-                    continue
-                }
-
-                if className.contains("ToolbarTitle") ||
-                    className.contains("ToolbarItemViewer") ||
-                    className.contains("ToolbarItemView") {
-                    view.wantsLayer = true
-                    view.layer?.backgroundColor = NSColor.clear.cgColor
-                    view.layer?.cornerRadius = 0
-
-                    for child in view.allDescendants() {
-                        let childClass = String(describing: type(of: child))
-                        if childClass == "NSVisualEffectView" || childClass.contains("Background") {
-                            child.isHidden = true
-                        }
-                        child.wantsLayer = true
-                        child.layer?.backgroundColor = NSColor.clear.cgColor
-                        child.layer?.cornerRadius = 0
-                    }
-                }
-            }
-        }
-    }
-
-    /// In normal mode, the titlebar container is in the window's own hierarchy.
-    /// In native fullscreen, macOS moves it into a private child window.
-    private func titlebarContainer(for window: NSWindow) -> NSView? {
-        if !window.styleMask.contains(.fullScreen) {
-            return window.contentView?
-                .firstViewFromRoot(withClassName: "NSTitlebarContainerView")
-        }
-
-        for candidate in NSApplication.shared.windows {
-            guard type(of: candidate).description() == "NSToolbarFullScreenWindow" else { continue }
-            guard candidate.parent == window else { continue }
-            return candidate.contentView?
-                .firstViewFromRoot(withClassName: "NSTitlebarContainerView")
-        }
-
-        return nil
+        window.backgroundColor = NSColor(GhosttyAppManager.shared.backgroundColor)
     }
 
     // MARK: - Dock Menu
@@ -613,6 +531,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - App Quit Confirmation
 
     func applicationWillTerminate(_ notification: Notification) {
+        appearanceObserver = nil
         if let monitor = browserShortcutMonitor {
             NSEvent.removeMonitor(monitor)
             browserShortcutMonitor = nil
@@ -682,5 +601,140 @@ extension FocusedValues {
     var paneViewModel: PaneContainerViewModel? {
         get { self[FocusedPaneViewModelKey.self] }
         set { self[FocusedPaneViewModelKey.self] = newValue }
+    }
+}
+
+final class WebKitInspectorReproManager: NSObject {
+    static let shared = WebKitInspectorReproManager()
+
+    private var windows: [NSWindow] = []
+
+    func open(url: URL) {
+        let controller = WebKitInspectorReproViewController(initialURL: url)
+        let window = NSWindow(
+            contentRect: NSRect(x: 220, y: 220, width: 1200, height: 840),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "WebKit Inspector Repro"
+        window.contentViewController = controller
+        window.isReleasedWhenClosed = false
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowWillClose(_:)),
+            name: NSWindow.willCloseNotification,
+            object: window
+        )
+
+        windows.append(window)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        windows.removeAll { $0 === window }
+        NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: window)
+    }
+}
+
+final class WebKitInspectorReproViewController: NSViewController {
+    private let initialURL: URL
+    private let webView: WKWebView
+    private let urlField = NSTextField(string: "")
+
+    init(initialURL: URL) {
+        self.initialURL = initialURL
+
+        let config = WKWebViewConfiguration()
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        self.webView = WKWebView(frame: .zero, configuration: config)
+
+        super.init(nibName: nil, bundle: nil)
+
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        let root = NSView()
+        root.translatesAutoresizingMaskIntoConstraints = false
+
+        let bar = NSStackView()
+        bar.orientation = .horizontal
+        bar.alignment = .centerY
+        bar.spacing = 8
+        bar.translatesAutoresizingMaskIntoConstraints = false
+
+        urlField.isEditable = true
+        urlField.isBezeled = true
+        urlField.lineBreakMode = .byTruncatingMiddle
+        urlField.target = self
+        urlField.action = #selector(loadFromField)
+
+        let loadButton = NSButton(title: "Load", target: self, action: #selector(loadFromField))
+        let inspectButton = NSButton(title: "Open Inspector", target: self, action: #selector(openInspector))
+
+        bar.addArrangedSubview(urlField)
+        bar.addArrangedSubview(loadButton)
+        bar.addArrangedSubview(inspectButton)
+
+        webView.translatesAutoresizingMaskIntoConstraints = false
+
+        root.addSubview(bar)
+        root.addSubview(webView)
+
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+            bar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
+            bar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
+            webView.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 10),
+            webView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
+
+        self.view = root
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        urlField.stringValue = initialURL.absoluteString
+        webView.load(URLRequest(url: initialURL))
+    }
+
+    @objc private func loadFromField() {
+        guard let url = URL(string: urlField.stringValue) else { return }
+        webView.load(URLRequest(url: url))
+    }
+
+    @objc private func openInspector() {
+        let selector = NSSelectorFromString("_inspector")
+        if webView.responds(to: selector),
+           let inspector = webView.perform(selector)?.takeUnretainedValue() as AnyObject? {
+            let show = NSSelectorFromString("show")
+            if inspector.responds(to: show) {
+                _ = inspector.perform(show)
+                return
+            }
+        }
+
+        let fallbacks = [
+            NSSelectorFromString("_showWebInspector"),
+            NSSelectorFromString("_showWebInspector:"),
+            NSSelectorFromString("showWebInspector"),
+            NSSelectorFromString("showWebInspector:")
+        ]
+        for selector in fallbacks where webView.responds(to: selector) {
+            _ = webView.perform(selector, with: nil)
+            return
+        }
     }
 }

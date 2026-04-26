@@ -59,6 +59,14 @@ Non-obvious learnings specific to the Swift source files in this directory.
 - **CI build**: GitHub Actions runs this in `.github/workflows/build.yml` ("Build CLI") and the bundle step includes the binary.
 - **Local build**: The Watchtower target includes a "Build CLI" shell script phase that runs bun; ensure `bun` is installed locally or the build will fail.
 
+## Sources List Sidebar (NavigationSplitView)
+
+- **No `columnVisibility` binding**: `NavigationSplitView` is constructed without a `columnVisibility:` argument. Letting AppKit's underlying `NSSplitViewController` own sidebar state avoids fighting the native collapse animation — earlier attempts to bind it to a `@Published` flag caused the sidebar to slide off-screen and the auto-injected toggle to land in the toolbar's `>>` overflow.
+- **`Cmd+Shift+L` via AppKit selector**: The "Toggle Sidebar" `CommandGroup(after: .sidebar)` button sends `#selector(NSSplitViewController.toggleSidebar(_:))` through `NSApp.sendAction(_:to:from:)` rather than mutating SwiftUI state. This is the same path the auto-injected toolbar toggle uses, so they stay in sync by definition.
+- **No custom titlebar chrome**: `configureWindow` is intentionally minimal (title, `toolbarStyle = .unified`, background color). A previous version walked the AppKit view hierarchy via `firstViewFromRoot(withClassName:)` to paint `NSTitlebarContainerView` and hide `NSVisualEffectView` descendants — that broke the sidebar's vibrancy material and clipped split-view layout. Don't reintroduce it.
+- **Sidebar selection mirrors `contextualPane`**: `SourcesListView.selectionBinding` reads `viewModel.contextualPane?.id` (not `panes.first(where: { $0.isFocused })`), so the highlighted row stays correct when the command palette has stolen first responder. Writes route through `focusPane(id:)`.
+- **Sidebar replaces the titlebar status strip**: Per-pane status is shown as a colored dot in each `SourcesListRow` (using `appManager.paneStatusColor(pane.status)`). The previous `TitlebarPaneStatusStrip` / `TitlebarStatusStripInstaller` types were removed — they injected an `NSHostingView` into `NSTitlebarContainerView` which conflicted with NavigationSplitView's split-view layout.
+
 ## Command Palette
 
 - **No `managesFocus` flag**: The old `CommandPaletteItem.managesFocus` / `actionDidManageFocus` / `restoreFocus` three-way protocol is replaced by the `focusGeneration` counter and auto-dismiss in `focusPane`. Actions that need to manage focus call `vm.focusPane()` directly.

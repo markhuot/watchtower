@@ -14,6 +14,18 @@ private struct PaneFramePreferenceKey: PreferenceKey {
     }
 }
 
+private struct PaneOverviewScaleModifier: ViewModifier {
+    let scale: CGFloat
+
+    func body(content: Content) -> some View {
+        if scale < 0.999 {
+            content.scaleEffect(scale, anchor: UnitPoint(x: 0, y: 0.5))
+        } else {
+            content
+        }
+    }
+}
+
 // MARK: - PendingFocus
 
 /// A one-shot focus token. Represents "focus this pane when its view appears."
@@ -47,12 +59,158 @@ struct ContentView: View {
     @ObservedObject private var config = WatchtowerConfig.shared
     @State private var showCLIInstallSheet = false
     @State private var paneFrames: [UUID: CGRect] = [:]
+    @State private var paneZoomScale: CGFloat = 1.0
+    @State private var magnifyMonitor: Any?
+    @State private var hostWindowNumber: Int?
+
+    private let minPaneZoomScale: CGFloat = 0.25
+    private let maxPaneZoomScale: CGFloat = 1.0
 
     /// Ensures the CLI install prompt only shows once per app launch,
     /// even if multiple windows are opened.
     private static var hasShownCLIPrompt = false
 
+    private var effectivePaneZoomScale: CGFloat {
+        1.0
+    }
+
+    private var isZoomedOutOverview: Bool {
+        effectivePaneZoomScale < 0.999
+    }
+
+    private func clampedPaneZoomScale(_ scale: CGFloat) -> CGFloat {
+        min(max(scale, minPaneZoomScale), maxPaneZoomScale)
+    }
+
+    private func installMagnifyMonitorIfNeeded() {
+        guard magnifyMonitor == nil else { return }
+
+        magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { event in
+            let windowNumber = hostWindowNumber ?? NSApp.keyWindow?.windowNumber
+            guard let windowNumber,
+                  event.window?.windowNumber == windowNumber else {
+                return event
+            }
+
+            paneZoomScale = clampedPaneZoomScale(paneZoomScale + event.magnification)
+            return nil
+        }
+    }
+
+    private func removeMagnifyMonitor() {
+        if let magnifyMonitor {
+            NSEvent.removeMonitor(magnifyMonitor)
+            self.magnifyMonitor = nil
+        }
+    }
+
     var body: some View {
+        NavigationSplitView {
+            SourcesListView(viewModel: viewModel)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 320)
+        } detail: {
+            detailContent
+        }
+        .focusedSceneValue(\.paneViewModel, viewModel)
+        .onAppear {
+            IPCServer.shared.register(viewModel)
+            installMagnifyMonitorIfNeeded()
+            viewModel.paneOverviewScale = effectivePaneZoomScale
+
+            // Show CLI install prompt on first window only
+            if !ContentView.hasShownCLIPrompt && CLIInstaller.shouldPrompt(dismissed: config.cliInstallDismissed) {
+                ContentView.hasShownCLIPrompt = true
+                showCLIInstallSheet = true
+            }
+        }
+        .onDisappear {
+            IPCServer.shared.unregister(viewModel)
+            removeMagnifyMonitor()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ghosttySurfaceClosed)) { notification in
+            if let view = notification.object as? GhosttyTerminalNSView {
+                let termId = view.terminal.id
+                NSLog("[CLOSE-DEBUG] .ghosttySurfaceClosed received for terminal %@, panes.count=%d, paneIds=%@",
+                      termId.uuidString, viewModel.panes.count,
+                      viewModel.panes.map { $0.id.uuidString }.joined(separator: ", "))
+                viewModel.removePane(byId: termId)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .browserPaneClosed)) { notification in
+            if let paneId = notification.userInfo?["paneId"] as? UUID {
+                viewModel.removePane(byId: paneId)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cefBrowserDidClose)) { notification in
+            if let paneId = notification.userInfo?["paneId"] as? UUID {
+                NSLog("[CEF-CLOSE] onReceive cefBrowserDidClose for pane %@, panes.count=%d", paneId.uuidString, viewModel.panes.count)
+                viewModel.finishRemovingCEFPane(byId: paneId)
+            } else {
+                NSLog("[CEF-CLOSE] onReceive cefBrowserDidClose but no paneId in userInfo!")
+            }
+        }
+        .toolbar {
+            if isZoomedOutOverview {
+                ToolbarItem(placement: .automatic) {
+                    Button("100%") {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            paneZoomScale = 1.0
+                        }
+                    }
+                    .help("Return pane overview to 100%")
+                }
+            }
+
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button("New Terminal") {
+                        let terminal = viewModel.addTerminal()
+                        viewModel.focusPane(terminal)
+                    }
+
+                    Button("New Browser") {
+                        viewModel.openNewBrowser()
+                    }
+
+                    Divider()
+
+                    ForEach(viewModel.projectActions) { action in
+                        actionMenuButton(action)
+                    }
+
+                    if !viewModel.projectActions.isEmpty && !viewModel.globalActions.isEmpty {
+                        Divider()
+                    }
+
+                    ForEach(viewModel.globalActions) { action in
+                        actionMenuButton(action)
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                } primaryAction: {
+                    viewModel.addContextualPane()
+                }
+            }
+        }
+        .sheet(isPresented: $viewModel.showActionDialog) {
+            if let action = viewModel.pendingAction {
+                ActionDialogView(
+                    isPresented: $viewModel.showActionDialog,
+                    action: action,
+                    workingDirectory: viewModel.focusedDirectory,
+                    onRun: { fieldValues in
+                        viewModel.executeAction(action, withValues: fieldValues)
+                    }
+                )
+            }
+        }
+        .sheet(isPresented: $showCLIInstallSheet) {
+            CLIInstallSheet(isPresented: $showCLIInstallSheet)
+        }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
         Group {
             if viewModel.panes.isEmpty {
                 EmptyStateView(
@@ -68,57 +226,67 @@ struct ContentView: View {
                 GeometryReader { geometry in
                     ScrollViewReader { scrollProxy in
                         ScrollView(.horizontal, showsIndicators: !viewModel.isFocusMode) {
-                            HStack(spacing: 0) {
-                                ForEach(viewModel.scrollablePanes) { pane in
+                            ZStack(alignment: .topLeading) {
+                                HStack(spacing: 0) {
+                                    ForEach(viewModel.scrollablePanes) { pane in
+                                        FocusModeWrapper(
+                                            pane: pane,
+                                            viewModel: viewModel
+                                        ) {
+                                            PaneWithHandle(
+                                                pane: pane,
+                                                allPanes: viewModel.scrollablePanes,
+                                                viewModel: viewModel,
+                                                windowWidth: geometry.size.width,
+                                                renderContent: true
+                                            )
+                                        }
+                                        .id(pane.id)
+                                        .background(
+                                            GeometryReader { paneGeo in
+                                                Color.clear.preference(
+                                                    key: PaneFramePreferenceKey.self,
+                                                    value: [pane.id: paneGeo.frame(in: .named("WindowSpace"))]
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+
+                                if let pinnedPane = viewModel.pinnedPane {
                                     FocusModeWrapper(
-                                        pane: pane,
+                                        pane: pinnedPane,
                                         viewModel: viewModel
                                     ) {
                                         PaneWithHandle(
-                                            pane: pane,
-                                            allPanes: viewModel.scrollablePanes,
+                                            pane: pinnedPane,
+                                            allPanes: [pinnedPane],
                                             viewModel: viewModel,
                                             windowWidth: geometry.size.width,
-                                            renderContent: true
+                                            renderContent: true,
+                                            includeHandlesAndDropTargets: false
                                         )
                                     }
-                                    .id(pane.id)
-                                    .background(
-                                        GeometryReader { paneGeo in
-                                            Color.clear.preference(
-                                                key: PaneFramePreferenceKey.self,
-                                                value: [pane.id: paneGeo.frame(in: .named("WindowSpace"))]
-                                            )
-                                        }
-                                    )
+                                    .padding(.leading, 20)
+                                    .offset(y: 30)
+                                    .frame(height: max(0, geometry.size.height - 60), alignment: .topLeading)
+                                    .zIndex(1000)
                                 }
                             }
                             .padding(.leading, viewModel.pinnedLeadingInset(windowWidth: geometry.size.width))
                             .padding(10)
-                            .frame(minWidth: viewModel.isFullScreen ? geometry.size.width : nil)
+                            .frame(minWidth: viewModel.isFullScreen ? geometry.size.width : nil, alignment: .topLeading)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .overlay(alignment: .topLeading) {
-                            if let pinnedPane = viewModel.pinnedPane {
-                                FocusModeWrapper(
-                                    pane: pinnedPane,
-                                    viewModel: viewModel
-                                ) {
-                                    PaneWithHandle(
-                                        pane: pinnedPane,
-                                        allPanes: [pinnedPane],
-                                        viewModel: viewModel,
-                                        windowWidth: geometry.size.width,
-                                        renderContent: true,
-                                        includeHandlesAndDropTargets: false
-                                    )
-                                }
-                                .padding(.leading, 20)
-                                .offset(y: 30)
-                                .frame(height: max(0, geometry.size.height - 60), alignment: .topLeading)
-                                .zIndex(1000)
-                            }
-                        }
+                        .frame(
+                            width: geometry.size.width / effectivePaneZoomScale,
+                            height: geometry.size.height,
+                            alignment: .topLeading
+                        )
+                        .modifier(PaneOverviewScaleModifier(scale: effectivePaneZoomScale))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .background(appManager.backgroundColor)
                         .coordinateSpace(name: "WindowSpace")
                         .onChange(of: viewModel.focusedPaneId) { targetId in
                             guard let targetId = targetId else { return }
@@ -166,8 +334,10 @@ struct ContentView: View {
         }
         .background(appManager.backgroundColor.ignoresSafeArea())
         .background(
-            TitlebarStatusStripInstaller(viewModel: viewModel)
-                .frame(width: 0, height: 0)
+            WindowCaptureView { window in
+                hostWindowNumber = window?.windowNumber
+            }
+            .frame(width: 0, height: 0)
         )
         .contentShape(Rectangle())
         .coordinateSpace(name: "WindowSpace")
@@ -176,90 +346,8 @@ struct ContentView: View {
             viewModel: viewModel,
             paneFrames: paneFrames
         ))
-        .focusedSceneValue(\.paneViewModel, viewModel)
-        .onAppear {
-            IPCServer.shared.register(viewModel)
-
-            // Show CLI install prompt on first window only
-            if !ContentView.hasShownCLIPrompt && CLIInstaller.shouldPrompt(dismissed: config.cliInstallDismissed) {
-                ContentView.hasShownCLIPrompt = true
-                showCLIInstallSheet = true
-            }
-        }
-        .onDisappear {
-            IPCServer.shared.unregister(viewModel)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .ghosttySurfaceClosed)) { notification in
-            if let view = notification.object as? GhosttyTerminalNSView {
-                let termId = view.terminal.id
-                NSLog("[CLOSE-DEBUG] .ghosttySurfaceClosed received for terminal %@, panes.count=%d, paneIds=%@",
-                      termId.uuidString, viewModel.panes.count,
-                      viewModel.panes.map { $0.id.uuidString }.joined(separator: ", "))
-                viewModel.removePane(byId: termId)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .browserPaneClosed)) { notification in
-            if let paneId = notification.userInfo?["paneId"] as? UUID {
-                viewModel.removePane(byId: paneId)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .cefBrowserDidClose)) { notification in
-            if let paneId = notification.userInfo?["paneId"] as? UUID {
-                NSLog("[CEF-CLOSE] onReceive cefBrowserDidClose for pane %@, panes.count=%d", paneId.uuidString, viewModel.panes.count)
-                viewModel.finishRemovingCEFPane(byId: paneId)
-            } else {
-                NSLog("[CEF-CLOSE] onReceive cefBrowserDidClose but no paneId in userInfo!")
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button("New Terminal") {
-                        let terminal = viewModel.addTerminal()
-                        viewModel.focusPane(terminal)
-                    }
-
-                    Button("New Browser") {
-                        viewModel.openNewBrowser()
-                    }
-
-                    Divider()
-
-                    // Project actions
-                    ForEach(viewModel.projectActions) { action in
-                        actionMenuButton(action)
-                    }
-
-                    // Separator between project and global actions
-                    if !viewModel.projectActions.isEmpty && !viewModel.globalActions.isEmpty {
-                        Divider()
-                    }
-
-                    // Global actions
-                    ForEach(viewModel.globalActions) { action in
-                        actionMenuButton(action)
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                } primaryAction: {
-                    viewModel.addContextualPane()
-                }
-            }
-        }
-        .sheet(isPresented: $viewModel.showActionDialog) {
-            if let action = viewModel.pendingAction {
-                ActionDialogView(
-                    isPresented: $viewModel.showActionDialog,
-                    action: action,
-                    workingDirectory: viewModel.focusedDirectory,
-                    onRun: { fieldValues in
-                        viewModel.executeAction(action, withValues: fieldValues)
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showCLIInstallSheet) {
-            CLIInstallSheet(isPresented: $showCLIInstallSheet)
+        .onChange(of: effectivePaneZoomScale) { newScale in
+            viewModel.paneOverviewScale = newScale
         }
     }
 
@@ -290,177 +378,114 @@ struct ContentView: View {
     }
 }
 
-struct TitlebarPaneStatusStrip: View {
-    @ObservedObject var viewModel: PaneContainerViewModel
+private struct WindowCaptureView: NSViewRepresentable {
+    let onWindowChanged: (NSWindow?) -> Void
 
-    private var orderedPanes: [PaneModel] {
-        guard let pinnedId = viewModel.pinnedPaneId,
-              let pinnedPane = viewModel.panes.first(where: { $0.id == pinnedId }) else {
-            return viewModel.panes
-        }
-
-        return [pinnedPane] + viewModel.panes.filter { $0.id != pinnedId }
-    }
-
-    private func trailingPadding(for pane: PaneModel) -> CGFloat {
-        pane.id == viewModel.pinnedPaneId ? 8 : 0
-    }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ForEach(orderedPanes) { pane in
-                TitlebarPaneStatusDot(
-                    pane: pane,
-                    isPinned: pane.id == viewModel.pinnedPaneId,
-                    isSelected: viewModel.focusedPaneId == pane.id || pane.isFocused,
-                    onTap: {
-                        viewModel.focusPane(id: pane.id)
-                    }
-                )
-                .padding(.trailing, trailingPadding(for: pane))
-            }
-        }
-        .fixedSize()
-        .background(Color.clear)
-    }
-}
-
-struct TitlebarStatusStripInstaller: NSViewRepresentable {
-    @ObservedObject var viewModel: PaneContainerViewModel
-
-    func makeNSView(context: Context) -> TitlebarStatusInstallerNSView {
-        let view = TitlebarStatusInstallerNSView()
-        view.viewModel = viewModel
+    func makeNSView(context: Context) -> WindowCaptureNSView {
+        let view = WindowCaptureNSView()
+        view.onWindowChanged = onWindowChanged
         return view
     }
 
-    func updateNSView(_ nsView: TitlebarStatusInstallerNSView, context: Context) {
-        nsView.viewModel = viewModel
-        nsView.installOrUpdate()
+    func updateNSView(_ nsView: WindowCaptureNSView, context: Context) {
+        nsView.onWindowChanged = onWindowChanged
     }
 }
 
-final class TitlebarStatusInstallerNSView: NSView {
-    weak var viewModel: PaneContainerViewModel?
-    private var hostingView: NSHostingView<TitlebarPaneStatusStrip>?
+private final class WindowCaptureNSView: NSView {
+    var onWindowChanged: ((NSWindow?) -> Void)?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        installOrUpdate()
-    }
-
-    func installOrUpdate() {
-        guard let viewModel,
-              let window,
-              let container = window.contentView?.firstViewFromRoot(withClassName: "NSTitlebarContainerView") else {
-            return
-        }
-
-        if let hostingView {
-            hostingView.rootView = TitlebarPaneStatusStrip(viewModel: viewModel)
-            if hostingView.superview !== container {
-                hostingView.removeFromSuperview()
-                container.addSubview(hostingView)
-                activateConstraints(for: hostingView, in: container)
-            }
-            return
-        }
-
-        let host = NSHostingView(rootView: TitlebarPaneStatusStrip(viewModel: viewModel))
-        host.translatesAutoresizingMaskIntoConstraints = false
-        host.wantsLayer = false
-        host.layer?.backgroundColor = NSColor.clear.cgColor
-        container.addSubview(host)
-        activateConstraints(for: host, in: container)
-        hostingView = host
-    }
-
-    private func activateConstraints(for host: NSView, in container: NSView) {
-        NSLayoutConstraint.activate([
-            host.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            host.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-        ])
-    }
-
-    deinit {
-        hostingView?.removeFromSuperview()
+        onWindowChanged?(window)
     }
 }
 
-struct TitlebarPaneStatusDot: View {
+// MARK: - Sources List Sidebar
+
+struct SourcesListView: View {
+    @ObservedObject var viewModel: PaneContainerViewModel
+
+    /// Drives the sidebar's row selection. Reads from `contextualPane` so the
+    /// highlighted row tracks the currently active pane even when the command
+    /// palette has stolen first-responder (in which case `isFocused` is false
+    /// on every pane, but `contextualPane` still resolves via the palette's
+    /// pane id). Writes route through `focusPane(id:)`, which is the single
+    /// entry point for all focus changes.
+    private var selectionBinding: Binding<UUID?> {
+        Binding(
+            get: { viewModel.contextualPane?.id },
+            set: { newValue in
+                guard let id = newValue else { return }
+                viewModel.focusPane(id: id)
+            }
+        )
+    }
+
+    var body: some View {
+        List(selection: selectionBinding) {
+            Section("Panes") {
+                ForEach(viewModel.panes) { pane in
+                    SourcesListRow(
+                        pane: pane,
+                        isPinned: pane.id == viewModel.pinnedPaneId
+                    )
+                    .tag(pane.id)
+                }
+            }
+        }
+        .listStyle(.sidebar)
+    }
+}
+
+struct SourcesListRow: View {
     @ObservedObject var pane: PaneModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
     let isPinned: Bool
-    let isSelected: Bool
-    let onTap: () -> Void
 
-    @State private var bounceYOffset: CGFloat = 0
-
-    private var helpText: String {
-        if let subtitle = pane.subtitle, !subtitle.isEmpty {
-            return isPinned ? "📌 \(pane.title)\n\(subtitle)" : "\(pane.title)\n\(subtitle)"
-        }
-        return isPinned ? "📌 \(pane.title)" : pane.title
+    private var iconName: String {
+        if pane is BrowserPaneModel { return "globe" }
+        return "terminal"
     }
 
     private var statusColor: Color {
         appManager.paneStatusColor(pane.status)
     }
 
-    private var dotSize: CGFloat {
-        isSelected ? 12 : 9
-    }
-
     var body: some View {
-        Button(action: onTap) {
-            ZStack(alignment: .topTrailing) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: dotSize, height: dotSize)
-                    .shadow(
-                        color: statusColor.opacity(isSelected ? 1.0 : 0.4),
-                        radius: isSelected ? 5 : 3,
-                        x: 0,
-                        y: isSelected ? 1 : 0
-                    )
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
+                .frame(width: 16)
+                .foregroundColor(.secondary)
 
-                if isPinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.95))
-                        .shadow(color: .black.opacity(0.35), radius: 1, x: 0, y: 0)
-                        .offset(x: 4, y: -4)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                    Text(pane.title.isEmpty ? "Untitled" : pane.title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                if let subtitle = pane.subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
-            .offset(y: bounceYOffset)
-            .animation(.spring(response: 0.34, dampingFraction: 0.7), value: isSelected)
-            .contentShape(Rectangle())
+
+            Spacer(minLength: 4)
+
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+                .shadow(color: statusColor.opacity(0.5), radius: 2, x: 0, y: 0)
         }
-        .buttonStyle(.plain)
-            .background(Color.clear)
-        .onChange(of: isSelected) { selected in
-            bounceYOffset = 0
-            if selected {
-                withAnimation(.easeOut(duration: 0.14)) {
-                    bounceYOffset = -3
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
-                    withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) {
-                        bounceYOffset = 0
-                    }
-                }
-            } else {
-                withAnimation(.easeOut(duration: 0.14)) {
-                    bounceYOffset = 3
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
-                    withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) {
-                        bounceYOffset = 0
-                    }
-                }
-            }
-        }
-        .help(helpText)
+        .contentShape(Rectangle())
     }
 }
 
@@ -1302,6 +1327,11 @@ struct WindowDropDelegate: DropDelegate {
 
 class PaneContainerViewModel: ObservableObject {
     @Published var panes: [PaneModel] = []
+
+    /// Visual zoom scale applied to the pane strip in ContentView.
+    /// Used by embedded views (notably Ghostty terminals) to avoid
+    /// reporting scaled geometry back into their own internal sizing.
+    @Published var paneOverviewScale: CGFloat = 1.0
 
     /// The pane currently pinned to the left edge, if any.
     @Published var pinnedPaneId: UUID? = nil
@@ -2950,13 +2980,9 @@ class PaneContainerViewModel: ObservableObject {
 
     /// Walk the view hierarchy to find a BrowserEngineView associated with a pane ID.
     private func findBrowserEngineView(for paneId: UUID, in view: NSView) -> (any BrowserEngineView)? {
-        if let webView = view as? WatchtowerWebView,
-           webView.browser?.id == paneId {
-            return webView
-        }
-        if let chromiumView = view as? ChromiumBrowserView,
-           chromiumView.browser?.id == paneId {
-            return chromiumView
+        if let engineView = view as? any BrowserEngineView,
+           engineView.browser?.id == paneId {
+            return engineView
         }
         for subview in view.subviews {
             if let found = findBrowserEngineView(for: paneId, in: subview) {
