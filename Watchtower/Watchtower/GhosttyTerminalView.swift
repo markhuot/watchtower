@@ -2,6 +2,18 @@ import SwiftUI
 import AppKit
 import os
 
+extension NSColor {
+    var debugRGB: String {
+        guard let color = usingColorSpace(.sRGB) else { return "unconvertible" }
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return String(format: "r=%.3f g=%.3f b=%.3f a=%.3f", r, g, b, a)
+    }
+}
+
 // MARK: - Modifier Helpers
 
 /// Translate NSEvent.ModifierFlags to ghostty_input_mods_e.
@@ -109,7 +121,12 @@ struct GhosttyTerminalView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: GhosttyTerminalNSView, context: Context) {
-        nsView.sizeDidChange(size)
+        let overviewScale = terminal.viewModel?.paneOverviewScale ?? 1.0
+        let unscaledSize = CGSize(
+            width: size.width / max(overviewScale, 0.0001),
+            height: size.height
+        )
+        nsView.sizeDidChange(unscaledSize)
     }
 
     static func removeCachedView(for paneId: UUID) {
@@ -129,6 +146,10 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.eyes.Watchtower",
         category: "GhosttyTerminalNSView"
+    )
+    private static let statusLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.eyes.Watchtower",
+        category: "PaneStatus"
     )
 
     // The terminal model this view represents
@@ -152,6 +173,9 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     // Track content size for backing property changes
     private var contentSize: CGSize = .zero
 
+    // Pane-local fallback background used when Ghostty updates dynamic colors.
+    private var dynamicBackgroundColor: NSColor?
+
     // Debounce timer for size updates to reduce jitter during live resize
     private var sizeDebounceWorkItem: DispatchWorkItem? = nil
 
@@ -171,10 +195,21 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         }
     }
 
+    override func magnify(with event: NSEvent) {
+        // ContentView handles pinch-to-overview at the window level.
+        // Swallow per-surface magnify events so Ghostty does not apply
+        // its own zoom/rescale behavior inside the pane.
+    }
+
     private func setupView() {
         // We need a layer-backed view for Metal rendering
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
+        syncBackgroundColor()
+
+        let initialBG = NSColor(GhosttyAppManager.shared.backgroundColor).usingColorSpace(.sRGB) ?? .black
+        Self.logger.info(
+            "Preparing Ghostty surface pane=\(self.terminal.id.uuidString, privacy: .public) title=\(self.terminal.title, privacy: .public) appBG=\(initialBG.debugRGB, privacy: .public)"
+        )
 
         // Create the Ghostty surface
         guard let app = GhosttyAppManager.shared.app else {
@@ -269,6 +304,7 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         }
 
         Self.logger.info("Created Ghostty surface for terminal: \(self.terminal.title)")
+        syncColorScheme()
 
         // If the terminal has initial input, send it once the shell is ready.
         // We delay briefly to give the shell time to start and show its prompt.
@@ -307,6 +343,7 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.refreshStatusFromSurface()
         }
+
     }
 
     // MARK: - Public API
@@ -316,6 +353,9 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     }
 
     func updateStatus(_ status: PaneStatus) {
+        let message = "source=ghostty-updateStatus pane=\(self.terminal.id.uuidString) from=\(paneStatusName(self.terminal.terminalStatus)) to=\(paneStatusName(status)) title=\(self.terminal.title)"
+        Self.statusLogger.info("\(message, privacy: .public)")
+        appendPaneStatusLog(message)
         terminal.terminalStatus = status
     }
 
@@ -330,15 +370,71 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
     /// `.failed -> .active` promotion when a new command starts.
     func refreshStatusFromSurface(preserveFailedWhenIdle: Bool = false) {
         guard let surface = surface else { return }
-        let needsConfirm = ghostty_surface_needs_confirm_quit(surface)
-        if preserveFailedWhenIdle && !needsConfirm && terminal.terminalStatus == .failed {
+        if terminal.hasExternalStatusOverride {
+            let message = "source=ghostty-refresh pane=\(self.terminal.id.uuidString) skip=external-override current=\(paneStatusName(self.terminal.terminalStatus)) title=\(self.terminal.title)"
+            Self.statusLogger.info("\(message, privacy: .public)")
+            appendPaneStatusLog(message)
             return
         }
-        terminal.terminalStatus = needsConfirm ? .active : .idle
+        let needsConfirm = ghostty_surface_needs_confirm_quit(surface)
+        if preserveFailedWhenIdle && !needsConfirm && terminal.terminalStatus == .failed {
+            let message = "source=ghostty-refresh pane=\(self.terminal.id.uuidString) preserveFailedWhenIdle=true keep=failed needsConfirm=false title=\(self.terminal.title)"
+            Self.statusLogger.info("\(message, privacy: .public)")
+            appendPaneStatusLog(message)
+            return
+        }
+        let nextStatus: PaneStatus = needsConfirm ? .active : .idle
+        let message = "source=ghostty-refresh pane=\(self.terminal.id.uuidString) from=\(paneStatusName(self.terminal.terminalStatus)) to=\(paneStatusName(nextStatus)) needsConfirm=\(needsConfirm) preserveFailedWhenIdle=\(preserveFailedWhenIdle) title=\(self.terminal.title)"
+        Self.statusLogger.info("\(message, privacy: .public)")
+        appendPaneStatusLog(message)
+        terminal.terminalStatus = nextStatus
     }
 
     func updateTerminal(_ terminal: TerminalPaneModel) {
         self.terminal = terminal
+    }
+
+    @discardableResult
+    func applyColorChange(_ change: ghostty_action_color_change_s) -> Bool {
+        Self.logger.info(
+            "Applying color change pane=\(self.terminal.id.uuidString, privacy: .public) title=\(self.terminal.title, privacy: .public) kind=\(change.kind.rawValue) rgb=\(change.r),\(change.g),\(change.b)"
+        )
+        guard change.kind == GHOSTTY_ACTION_COLOR_KIND_BACKGROUND else { return false }
+        let color = NSColor(
+            red: CGFloat(change.r) / 255,
+            green: CGFloat(change.g) / 255,
+            blue: CGFloat(change.b) / 255,
+            alpha: 1
+        )
+        Self.logger.info(
+            "Pane background color change pane=\(self.terminal.id.uuidString, privacy: .public) title=\(self.terminal.title, privacy: .public) color=\(color.debugRGB, privacy: .public)"
+        )
+        DispatchQueue.main.async { [weak self] in
+            self?.dynamicBackgroundColor = color
+            self?.syncBackgroundColor()
+        }
+        return true
+    }
+
+    func syncColorScheme() {
+        guard let surface else { return }
+        let appearance = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+            ?? NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        let scheme = GhosttyAppManager.shared.currentColorScheme()
+        Self.logger.info(
+            "Syncing Ghostty surface color scheme pane=\(self.terminal.id.uuidString, privacy: .public) title=\(self.terminal.title, privacy: .public) appearance=\(String(describing: appearance), privacy: .public) scheme=\(scheme.rawValue)"
+        )
+        ghostty_surface_set_color_scheme(surface, scheme)
+    }
+
+    private func syncBackgroundColor() {
+        let fallback = dynamicBackgroundColor ?? NSColor(GhosttyAppManager.shared.backgroundColor)
+        layer?.backgroundColor = fallback.cgColor
+        let source = dynamicBackgroundColor == nil ? "config" : "dynamic"
+        let color = fallback.usingColorSpace(.sRGB) ?? fallback
+        Self.logger.info(
+            "Applied pane host background pane=\(self.terminal.id.uuidString, privacy: .public) title=\(self.terminal.title, privacy: .public) source=\(source, privacy: .public) color=\(color.debugRGB, privacy: .public)"
+        )
     }
 
     // MARK: - View Lifecycle
@@ -424,6 +520,8 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
                 ghostty_surface_set_content_scale(surface, Double(scale), Double(scale))
             }
 
+            syncColorScheme()
+
             // Claim focus if this view was pending
             if let pending = terminal.viewModel?.pendingFocus,
                pending.paneId == terminal.id,
@@ -452,6 +550,12 @@ class GhosttyTerminalNSView: NSView, NSTextInputClient {
                 )
             }
         }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        syncColorScheme()
+        syncBackgroundColor()
     }
 
     func sizeDidChange(_ size: CGSize) {

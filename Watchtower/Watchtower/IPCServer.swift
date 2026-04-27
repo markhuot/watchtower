@@ -2,6 +2,45 @@ import Foundation
 import SwiftUI
 import os
 
+private let paneStatusLogQueue = DispatchQueue(label: "com.watchtower.pane-status-log")
+private let paneStatusLogFormatter = ISO8601DateFormatter()
+
+func paneStatusName(_ status: PaneStatus) -> String {
+    switch status {
+    case .active:
+        return "active"
+    case .idle:
+        return "idle"
+    case .failed:
+        return "failed"
+    }
+}
+
+func appendPaneStatusLog(_ message: String) {
+    let logPath = NSHomeDirectory() + "/.config/watchtower/pane-status.log"
+    paneStatusLogQueue.async {
+        let dir = (logPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(
+            atPath: dir,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+
+        let line = "[\(paneStatusLogFormatter.string(from: Date()))] \(message)\n"
+        let data = Data(line.utf8)
+
+        if FileManager.default.fileExists(atPath: logPath) {
+            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: logPath)) {
+                defer { try? handle.close() }
+                try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+            }
+        } else {
+            try? data.write(to: URL(fileURLWithPath: logPath))
+        }
+    }
+}
+
 /// Lightweight Unix domain socket server for CLI → Watchtower IPC.
 ///
 /// Listens on `~/.config/watchtower/watchtower.sock` and accepts
@@ -25,6 +64,7 @@ final class IPCServer {
     static let shared = IPCServer()
 
     private let logger = Logger(subsystem: "com.watchtower", category: "IPC")
+    private let statusLogger = Logger(subsystem: "com.watchtower", category: "PaneStatus")
 
     /// The Unix domain socket path.
     let socketPath: String = {
@@ -592,6 +632,10 @@ final class IPCServer {
             return ["ok": false, "error": "Pane is not a terminal: \(paneIdStr)"]
         }
 
+        let message = "source=ipc-set-pane-status pane=\(terminal.id.uuidString) from=\(paneStatusName(terminal.terminalStatus)) to=\(paneStatusName(status)) raw=\(statusRaw) title=\(terminal.title)"
+        statusLogger.info("\(message, privacy: .public)")
+        appendPaneStatusLog(message)
+        terminal.hasExternalStatusOverride = true
         terminal.terminalStatus = status
         return ["ok": true]
     }

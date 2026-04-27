@@ -22,6 +22,10 @@ class GhosttyAppManager: ObservableObject {
         subsystem: Bundle.main.bundleIdentifier ?? "com.eyes.Watchtower",
         category: "GhosttyAppManager"
     )
+    private static let statusLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.eyes.Watchtower",
+        category: "PaneStatus"
+    )
 
     private static var hasRequestedNotificationAuthorization = false
 
@@ -33,7 +37,7 @@ class GhosttyAppManager: ObservableObject {
 
     @Published private(set) var readyState: ReadyState = .loading
 
-    /// Background color from Ghostty config, updated dynamically if the terminal changes it.
+    /// Background color from Ghostty config, used for window and pane chrome.
     @Published private(set) var backgroundColor: Color = Color(white: 0.1)
 
     /// Highlight color for focused pane border, from Ghostty theme or system accent.
@@ -169,6 +173,11 @@ class GhosttyAppManager: ObservableObject {
         }
         self.app = ghosttyApp
 
+        let startupScheme = Self.preferredColorScheme(from: cfg)
+        ghostty_app_set_color_scheme(ghosttyApp, startupScheme)
+        ghostty_app_tick(ghosttyApp)
+        Self.logger.info("Applied startup Ghostty color scheme scheme=\(startupScheme.rawValue)")
+
         // Set initial focus state
         ghostty_app_set_focus(ghosttyApp, NSApp.isActive)
 
@@ -210,6 +219,13 @@ class GhosttyAppManager: ObservableObject {
         // Read the 16 ANSI palette colors for the color picker
         self.themeColors = Self.readThemeColors(from: cfg)
 
+        let appearance = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        let bg = NSColor(self.backgroundColor).usingColorSpace(.sRGB) ?? .black
+        let fg = NSColor(self.foregroundColor).usingColorSpace(.sRGB) ?? .white
+        Self.logger.info(
+            "Ghostty config loaded appearance=\(String(describing: appearance), privacy: .public) windowTheme=\(Self.readWindowTheme(from: cfg) ?? "nil", privacy: .public) bg=\(bg.debugRGB, privacy: .public) fg=\(fg.debugRGB, privacy: .public) themeColors=\(self.themeColors.count)"
+        )
+
         Self.logger.info("GhosttyAppManager initialized successfully")
     }
 
@@ -241,12 +257,28 @@ class GhosttyAppManager: ObservableObject {
         guard let app = self.app else { return }
         ghostty_app_set_focus(app, true)
         isWindowActive = true
+        syncColorScheme()
     }
 
     @objc private func applicationDidResignActive(notification: Notification) {
         guard let app = self.app else { return }
         ghostty_app_set_focus(app, false)
         isWindowActive = false
+    }
+
+    func syncColorScheme() {
+        guard let app else { return }
+        let bestMatch = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        let scheme = currentColorScheme()
+        let windowTheme = Self.readWindowTheme(from: self.config) ?? "nil"
+        Self.logger.info(
+            "Syncing Ghostty app color scheme appearance=\(String(describing: bestMatch), privacy: .public) windowTheme=\(windowTheme, privacy: .public) scheme=\(scheme.rawValue)"
+        )
+        ghostty_app_set_color_scheme(app, scheme)
+    }
+
+    func currentColorScheme() -> ghostty_color_scheme_e {
+        Self.preferredColorScheme(from: config)
     }
 
     // MARK: - Static Callbacks
@@ -453,6 +485,10 @@ class GhosttyAppManager: ObservableObject {
         let exitCode = v.exit_code
         let status: PaneStatus = exitCode == 0 ? .idle : .failed
         DispatchQueue.main.async {
+            view.terminal.hasExternalStatusOverride = false
+            let message = "source=ghostty-childExited pane=\(view.terminal.id.uuidString) exitCode=\(exitCode) to=\(paneStatusName(status)) title=\(view.terminal.title)"
+            Self.statusLogger.info("\(message, privacy: .public)")
+            appendPaneStatusLog(message)
             view.updateStatus(status)
         }
         return true
@@ -469,8 +505,16 @@ class GhosttyAppManager: ObservableObject {
         let exitCode = v.exit_code  // -1 = not reported, 0 = success, 1-255 = failure
         DispatchQueue.main.async {
             if exitCode > 0 {
+                view.terminal.hasExternalStatusOverride = false
+                let message = "source=ghostty-commandFinished pane=\(view.terminal.id.uuidString) exitCode=\(exitCode) action=set-failed title=\(view.terminal.title)"
+                Self.statusLogger.info("\(message, privacy: .public)")
+                appendPaneStatusLog(message)
                 view.updateStatus(.failed)
             } else {
+                view.terminal.hasExternalStatusOverride = false
+                let message = "source=ghostty-commandFinished pane=\(view.terminal.id.uuidString) exitCode=\(exitCode) action=refresh title=\(view.terminal.title)"
+                Self.statusLogger.info("\(message, privacy: .public)")
+                appendPaneStatusLog(message)
                 view.refreshStatusFromSurface()
             }
         }
@@ -640,6 +684,57 @@ class GhosttyAppManager: ObservableObject {
         return Color(white: 0.1)
     }
 
+    private static func readWindowTheme(from config: ghostty_config_t?) -> String? {
+        guard let config else { return nil }
+        var value: UnsafePointer<CChar>?
+        let key = "window-theme"
+        guard ghostty_config_get(config, &value, key, UInt(key.lengthOfBytes(using: .utf8))) else {
+            return nil
+        }
+        guard let value else { return nil }
+        return String(cString: value)
+    }
+
+    private static func preferredColorScheme(from config: ghostty_config_t?) -> ghostty_color_scheme_e {
+        switch readWindowTheme(from: config) {
+        case "light":
+            return GHOSTTY_COLOR_SCHEME_LIGHT
+        case "dark":
+            return GHOSTTY_COLOR_SCHEME_DARK
+        case "auto":
+            let background = readBackgroundColor(from: config!)
+            let luminance = NSColor(background)
+                .usingColorSpace(.sRGB)
+                .map(Self.relativeLuminance(of:))
+                ?? 0.0
+            return luminance < 0.18 ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT
+        case "system", nil:
+            return systemColorScheme()
+        default:
+            return systemColorScheme()
+        }
+    }
+
+    private static func systemColorScheme() -> ghostty_color_scheme_e {
+        let globalDefaults = UserDefaults(suiteName: "NSGlobalDomain")
+        let isDark = globalDefaults?.string(forKey: "AppleInterfaceStyle") == "Dark"
+        return isDark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT
+    }
+
+    private static func relativeLuminance(of color: NSColor) -> Double {
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+
+        func linearize(_ c: CGFloat) -> CGFloat {
+            c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+
+        return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
+    }
+
     private static func readForegroundColor(from config: ghostty_config_t) -> Color {
         var color = ghostty_config_color_s(r: 0, g: 0, b: 0)
         let key = "foreground"
@@ -717,17 +812,13 @@ class GhosttyAppManager: ObservableObject {
         target: ghostty_target_s,
         v: ghostty_action_color_change_s
     ) -> Bool {
-        // Only handle background color changes
-        guard v.kind == GHOSTTY_ACTION_COLOR_KIND_BACKGROUND else { return false }
-        let newColor = Color(
-            red: Double(v.r) / 255,
-            green: Double(v.g) / 255,
-            blue: Double(v.b) / 255
+        guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
+        guard let surface = target.target.surface else { return false }
+        guard let view = surfaceView(from: surface) else { return false }
+        logger.info(
+            "Ghostty color change action pane=\(view.terminal.id.uuidString, privacy: .public) title=\(view.terminal.title, privacy: .public) kind=\(v.kind.rawValue) rgb=\(v.r),\(v.g),\(v.b)"
         )
-        DispatchQueue.main.async {
-            shared.backgroundColor = newColor
-        }
-        return true
+        return view.applyColorChange(v)
     }
 
     private static func setMouseShape(
