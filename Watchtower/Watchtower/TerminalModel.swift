@@ -11,6 +11,10 @@ class TerminalPaneModel: PaneModel {
     @Published var terminalStatus: PaneStatus
     @Published var terminalDirectory: String
 
+    /// When true, an external integration (like the OpenCode plugin) owns the
+    /// pane status and Ghostty-derived active/idle refreshes should not override it.
+    @Published var hasExternalStatusOverride: Bool = false
+
     /// The current git branch name for this terminal's working directory.
     /// `nil` when not inside a git repository.
     @Published var gitBranch: String? = nil
@@ -51,6 +55,9 @@ class TerminalPaneModel: PaneModel {
 
     /// In-flight git branch detection task, cancelled when directory changes.
     private var branchDetectionTask: Task<Void, Never>? = nil
+
+    /// The repo root currently being watched for git branch changes.
+    private var observedRepoRoot: String? = nil
 
     /// Combine subscription for directory changes.
     private var cancellables = Set<AnyCancellable>()
@@ -102,6 +109,11 @@ class TerminalPaneModel: PaneModel {
                 self?.detectGitBranch(for: dir)
             }
             .store(in: &cancellables)
+    }
+
+    deinit {
+        branchDetectionTask?.cancel()
+        WorkspaceManager.removeGitBranchObserver(self, repoRoot: observedRepoRoot)
     }
 
     /// Update the progress report and reset the auto-clear timer.
@@ -167,15 +179,19 @@ class TerminalPaneModel: PaneModel {
     private func detectGitBranch(for directory: String) {
         branchDetectionTask?.cancel()
         branchDetectionTask = Task { @MainActor [weak self] in
-            let root = await WorkspaceManager.detectGitRepoRoot(for: directory)
-            guard !Task.isCancelled else { return }
-            if root != nil {
-                let branch = await WorkspaceManager.currentBranch(for: directory)
-                guard !Task.isCancelled else { return }
+            guard let self else { return }
+
+            WorkspaceManager.removeGitBranchObserver(self, repoRoot: observedRepoRoot)
+            observedRepoRoot = nil
+
+            let repoRoot = await WorkspaceManager.observeGitBranch(for: directory, observer: self) { [weak self] branch in
                 self?.gitBranch = branch
-            } else {
-                self?.gitBranch = nil
             }
+            guard !Task.isCancelled else {
+                WorkspaceManager.removeGitBranchObserver(self, repoRoot: repoRoot)
+                return
+            }
+            self.observedRepoRoot = repoRoot
         }
     }
 }
