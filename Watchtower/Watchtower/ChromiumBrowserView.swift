@@ -23,6 +23,11 @@ class ChromiumBrowserView: NSView, BrowserEngineView {
               browser?.id.uuidString ?? "nil", cefBrowser != nil ? 1 : 0)
     }
 
+    override func magnify(with event: NSEvent) {
+        // ContentView handles pinch-to-overview globally.
+        // Suppress per-pane magnify so CEF never zooms itself.
+    }
+
     // MARK: - BrowserEngineView
 
     func loadRequest(_ request: URLRequest) {

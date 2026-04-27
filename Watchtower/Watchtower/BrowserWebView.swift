@@ -3,6 +3,7 @@ import WebKit
 import os
 
 private let logger = Logger(subsystem: "com.watchtower", category: "BrowserWebView")
+private let inspectorIsolationModeEnabled = true
 
 // MARK: - Shared Configuration
 
@@ -64,6 +65,14 @@ enum BrowserConfiguration {
 class WatchtowerWebView: WKWebView, BrowserEngineView {
     weak var browser: BrowserPaneModel?
     private var activeFindQuery: String = ""
+    private weak var embeddedInspectorView: NSView?
+    private var inspectorHostWindow: NSWindow?
+    private static let inspectorActionSelectors: Set<String> = [
+        "showWebInspector:",
+        "showWebInspector",
+        "_showWebInspector:",
+        "_showWebInspector"
+    ]
 
     /// While a pane reorder drag is active, this web view should not
     /// participate as an NSDraggingDestination. Returning no-op drag
@@ -94,48 +103,13 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
     }
 
     func openWebInspector() {
-        if let window = window {
-            _ = window.makeFirstResponder(self)
-        }
+        openWebInspectorDetachedPreferred()
+        scheduleInspectorSnapshots(reason: "openWebInspector(detachedPreferred)")
+    }
 
-        // Preferred route on modern WebKit: ask the private inspector proxy
-        // object to show itself (`_inspector.show`).
-        let inspectorSelector = NSSelectorFromString("_inspector")
-        if responds(to: inspectorSelector),
-           let inspector = perform(inspectorSelector)?.takeUnretainedValue() as AnyObject? {
-            let showSelector = NSSelectorFromString("show")
-            if inspector.responds(to: showSelector) {
-                _ = inspector.perform(showSelector)
-                return
-            }
-        }
-
-        // Fallback: try known WebKit/AppKit selector variants on the view.
-        let selectors = [
-            NSSelectorFromString("_showWebInspector"),
-            NSSelectorFromString("_showWebInspector:"),
-            NSSelectorFromString("showWebInspector"),
-            NSSelectorFromString("showWebInspector:"),
-            NSSelectorFromString("_inspectElement"),
-            NSSelectorFromString("_inspectElement:")
-        ]
-
-        for selector in selectors where responds(to: selector) {
-            _ = perform(selector, with: nil)
-            return
-        }
-
-        // Final fallback: route through AppKit action dispatch.
-        for selector in selectors {
-            if NSApp.sendAction(selector, to: nil, from: nil) {
-                return
-            }
-            if NSApp.sendAction(selector, to: nil, from: self) {
-                return
-            }
-        }
-
-        logger.error("Failed to open WebKit web inspector: no compatible selector path found")
+    override func magnify(with event: NSEvent) {
+        // ContentView handles pinch-to-overview globally.
+        // Suppress WebKit's per-view magnification handling.
     }
 
     func findInPage(_ query: String) {
@@ -383,6 +357,340 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
         return super.performKeyEquivalent(with: event)
     }
 
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+
+        for item in menu.items where item.title.localizedCaseInsensitiveContains("inspect element") {
+            item.target = self
+            item.action = #selector(handleInspectElementFromContextMenu(_:))
+            logger.info("[InspectorDebug] rewired context menu Inspect Element action")
+        }
+
+        let titles = menu.items.map { item in
+            let title = item.title.isEmpty ? "<empty>" : item.title
+            return "\(title) [enabled=\(item.isEnabled)]"
+        }.joined(separator: " | ")
+        logger.info("[InspectorDebug] context menu opened items=\(titles, privacy: .public)")
+    }
+
+    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
+        super.didCloseMenu(menu, with: event)
+        scheduleInspectorSnapshots(reason: "contextMenuClosed")
+    }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        let className = String(describing: type(of: subview))
+        if className.localizedCaseInsensitiveContains("inspector") || className.contains("WK") {
+            logger.info("[InspectorDebug] didAddSubview class=\(className, privacy: .public) frame=\(NSStringFromRect(subview.frame), privacy: .public) hidden=\(subview.isHidden)")
+            if className.localizedCaseInsensitiveContains("inspector") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.logViewTree(subview, reason: "inspectorSubviewAdded")
+                }
+            }
+        }
+    }
+
+    @objc private func handleInspectElementFromContextMenu(_ sender: Any?) {
+        logger.info("[InspectorDebug] context menu Inspect Element invoked")
+        openWebInspector()
+    }
+
+    private func promoteInspectorToSeparateWindowIfPresent() {
+        guard let sourceWindow = window else { return }
+        guard let inspectorView = collectDescendants(from: sourceWindow.contentView).first(where: {
+            String(describing: type(of: $0)).localizedCaseInsensitiveContains("inspector")
+        }) else {
+            logger.info("[InspectorDebug] no inspector view found to promote")
+            return
+        }
+
+        if let host = inspectorHostWindow {
+            host.makeKeyAndOrderFront(nil)
+            if inspectorView.superview !== host.contentView {
+                moveInspectorView(inspectorView, into: host)
+            }
+            return
+        }
+
+        let host = NSWindow(
+            contentRect: NSRect(x: 180, y: 180, width: 1000, height: 700),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        host.title = "Web Inspector"
+        host.isReleasedWhenClosed = false
+
+        moveInspectorView(inspectorView, into: host)
+        inspectorHostWindow = host
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(inspectorHostWindowWillClose(_:)),
+            name: NSWindow.willCloseNotification,
+            object: host
+        )
+
+        host.makeKeyAndOrderFront(nil)
+        logger.info("[InspectorDebug] promoted inspector into separate Watchtower window")
+    }
+
+    private func moveInspectorView(_ inspectorView: NSView, into hostWindow: NSWindow) {
+        let container = hostWindow.contentView ?? NSView(frame: hostWindow.contentRect(forFrameRect: hostWindow.frame))
+        if hostWindow.contentView == nil {
+            hostWindow.contentView = container
+        }
+
+        container.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(inspectorHostContentFrameChanged(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: container
+        )
+
+        inspectorView.removeFromSuperview()
+        inspectorView.frame = container.bounds
+        inspectorView.autoresizingMask = [.width, .height]
+        inspectorView.translatesAutoresizingMaskIntoConstraints = true
+        container.addSubview(inspectorView)
+        if let layer = inspectorView.layer {
+            layer.frame = inspectorView.bounds
+        }
+        embeddedInspectorView = inspectorView
+
+        if let sourceWindow = window {
+            collapseEmbeddedInspectorSpace(in: sourceWindow)
+            for delay in [0.0, 0.08, 0.25, 0.6] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak sourceWindow] in
+                    guard let self, let sourceWindow else { return }
+                    self.collapseEmbeddedInspectorSpace(in: sourceWindow)
+                }
+            }
+        }
+    }
+
+    @objc private func inspectorHostWindowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow, closing === inspectorHostWindow else { return }
+        if let contentView = closing.contentView {
+            NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: contentView)
+        }
+        NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: closing)
+        inspectorHostWindow = nil
+        embeddedInspectorView = nil
+        logger.info("[InspectorDebug] inspector host window closed")
+    }
+
+    @objc private func inspectorHostContentFrameChanged(_ notification: Notification) {
+        guard let contentView = notification.object as? NSView,
+              let inspectorView = embeddedInspectorView else { return }
+        inspectorView.frame = contentView.bounds
+        inspectorView.needsLayout = true
+        inspectorView.layoutSubtreeIfNeeded()
+        if let layer = inspectorView.layer {
+            layer.frame = inspectorView.bounds
+        }
+        logger.info("[InspectorDebug] inspector host resized frame=\(NSStringFromRect(inspectorView.frame), privacy: .public)")
+    }
+
+    private func collapseEmbeddedInspectorSpace(in sourceWindow: NSWindow) {
+        guard let webViewSuperview = superview else { return }
+        for subview in webViewSuperview.subviews {
+            let name = String(describing: type(of: subview)).lowercased()
+            if name.contains("inspector") {
+                subview.isHidden = true
+                subview.frame.size.height = 0
+                logger.info("[InspectorDebug] collapsed embedded inspector placeholder class=\(String(describing: type(of: subview)), privacy: .public)")
+            }
+        }
+
+        var ancestor: NSView? = webViewSuperview
+        while let current = ancestor {
+            if let split = current as? NSSplitView,
+               split.subviews.contains(self) {
+                for subview in split.subviews where subview !== self {
+                    subview.isHidden = true
+                    if !split.isVertical {
+                        subview.frame.size.height = 0
+                    } else {
+                        subview.frame.size.width = 0
+                    }
+                    logger.info("[InspectorDebug] collapsed split sibling class=\(String(describing: type(of: subview)), privacy: .public)")
+                }
+
+                self.frame = split.bounds
+                logger.info("[InspectorDebug] expanded web view to split bounds=\(NSStringFromRect(split.bounds), privacy: .public)")
+            }
+            ancestor = current.superview
+        }
+
+        sourceWindow.contentView?.needsLayout = true
+        sourceWindow.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    private func openWebInspectorDetachedPreferred() {
+        if let window = window {
+            _ = window.makeFirstResponder(self)
+        }
+
+        let inspectorSelector = NSSelectorFromString("_inspector")
+        if responds(to: inspectorSelector),
+           let inspector = perform(inspectorSelector)?.takeUnretainedValue() as AnyObject? {
+            logger.info("[InspectorDebug] inspector object class=\(String(describing: type(of: inspector)), privacy: .public)")
+
+            let attachedSelectors = [
+                NSSelectorFromString("setAttached:"),
+                NSSelectorFromString("setShowsAttached:"),
+                NSSelectorFromString("setStartsAttached:")
+            ]
+            for attachedSelector in attachedSelectors where inspector.responds(to: attachedSelector) {
+                logger.info("[InspectorDebug] detachedPreferred calling \(NSStringFromSelector(attachedSelector), privacy: .public) false")
+                _ = invokeBoolSelector(attachedSelector, on: inspector, value: false)
+            }
+
+            let detachSelectors = [
+                NSSelectorFromString("detach"),
+                NSSelectorFromString("_detach")
+            ]
+            for detachSelector in detachSelectors where inspector.responds(to: detachSelector) {
+                logger.info("[InspectorDebug] detachedPreferred calling \(NSStringFromSelector(detachSelector), privacy: .public)")
+                _ = inspector.perform(detachSelector)
+            }
+
+            let showSelector = NSSelectorFromString("show")
+            if inspector.responds(to: showSelector) {
+                logger.info("[InspectorDebug] detachedPreferred via _inspector.show")
+                _ = inspector.perform(showSelector)
+                return
+            }
+        }
+
+        let selectors = [
+            NSSelectorFromString("_showWebInspector"),
+            NSSelectorFromString("_showWebInspector:"),
+            NSSelectorFromString("showWebInspector"),
+            NSSelectorFromString("showWebInspector:")
+        ]
+
+        for selector in selectors where responds(to: selector) {
+            logger.info("[InspectorDebug] detachedPreferred via selector=\(NSStringFromSelector(selector), privacy: .public)")
+            _ = perform(selector, with: nil)
+            return
+        }
+
+        for selector in selectors {
+            if NSApp.sendAction(selector, to: nil, from: self) {
+                logger.info("[InspectorDebug] detachedPreferred via NSApp.sendAction selector=\(NSStringFromSelector(selector), privacy: .public)")
+                return
+            }
+        }
+
+        logger.error("[InspectorDebug] detachedPreferred failed; falling back to openWebInspector")
+        openWebInspector()
+    }
+
+    private func invokeBoolSelector(_ selector: Selector, on object: AnyObject, value: Bool) -> Bool {
+        guard let nsObject = object as? NSObject else { return false }
+        let imp = nsObject.method(for: selector)
+        typealias Function = @convention(c) (AnyObject, Selector, Bool) -> Void
+        let function = unsafeBitCast(imp, to: Function.self)
+        function(nsObject, selector, value)
+        return true
+    }
+
+    override func responds(to aSelector: Selector!) -> Bool {
+        let result = super.responds(to: aSelector)
+        let name = NSStringFromSelector(aSelector)
+        if Self.inspectorActionSelectors.contains(name) {
+            logger.info("[InspectorDebug] responds(\(name, privacy: .public))=\(result)")
+        }
+        return result
+    }
+
+    private func scheduleInspectorSnapshots(reason: String) {
+        logInspectorSnapshot(reason: "\(reason)-immediate")
+        for delay in [0.08, 0.25, 0.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.logInspectorSnapshot(reason: "\(reason)-t+\(String(format: "%.2f", delay))")
+            }
+        }
+    }
+
+    private func logInspectorSnapshot(reason: String) {
+        guard let window else {
+            logger.info("[InspectorDebug] snapshot reason=\(reason, privacy: .public) window=nil")
+            return
+        }
+
+        let key = NSApp.keyWindow === window
+        logger.info(
+            "[InspectorDebug] snapshot reason=\(reason, privacy: .public) key=\(key) firstResponder=\(String(describing: type(of: window.firstResponder as Any)), privacy: .public) webViewFrame=\(NSStringFromRect(self.frame), privacy: .public)"
+        )
+
+        let rootViews = collectDescendants(from: window.contentView)
+        let interesting = rootViews.filter { view in
+            let name = String(describing: type(of: view)).lowercased()
+            return name.contains("inspector") ||
+                name.contains("wk") ||
+                name.contains("web")
+        }
+
+        for view in interesting.prefix(20) {
+            let name = String(describing: type(of: view))
+            logger.info(
+                "[InspectorDebug] view class=\(name, privacy: .public) frame=\(NSStringFromRect(view.frame), privacy: .public) hidden=\(view.isHidden) alpha=\(view.alphaValue) wantsLayer=\(view.wantsLayer)"
+            )
+        }
+
+        for view in subviews.prefix(20) {
+            let name = String(describing: type(of: view))
+            logger.info(
+                "[InspectorDebug] webView.subview class=\(name, privacy: .public) frame=\(NSStringFromRect(view.frame), privacy: .public) hidden=\(view.isHidden) alpha=\(view.alphaValue) wantsLayer=\(view.wantsLayer)"
+            )
+        }
+
+        if let inspectorView = interesting.first(where: {
+            String(describing: type(of: $0)).localizedCaseInsensitiveContains("inspector")
+        }) {
+            logViewTree(inspectorView, reason: reason)
+        }
+    }
+
+    private func collectDescendants(from root: NSView?) -> [NSView] {
+        guard let root else { return [] }
+        var result: [NSView] = []
+        var stack: [NSView] = [root]
+
+        while let view = stack.popLast() {
+            for subview in view.subviews {
+                result.append(subview)
+                stack.append(subview)
+            }
+        }
+
+        return result
+    }
+
+    private func logViewTree(_ root: NSView, reason: String) {
+        let rootName = String(describing: type(of: root))
+        logger.info("[InspectorDebug] tree reason=\(reason, privacy: .public) root=\(rootName, privacy: .public) frame=\(NSStringFromRect(root.frame), privacy: .public)")
+
+        let descendants = collectDescendants(from: root)
+        for view in descendants.prefix(40) {
+            let name = String(describing: type(of: view))
+            let layerDesc: String
+            if let layer = view.layer {
+                layerDesc = "layer=true opaque=\(layer.isOpaque) hidden=\(layer.isHidden)"
+            } else {
+                layerDesc = "layer=false"
+            }
+            logger.info(
+                "[InspectorDebug] tree node class=\(name, privacy: .public) frame=\(NSStringFromRect(view.frame), privacy: .public) hidden=\(view.isHidden) alpha=\(view.alphaValue) wantsLayer=\(view.wantsLayer) \(layerDesc, privacy: .public)"
+            )
+        }
+    }
+
     override func keyDown(with event: NSEvent) {
         // When collapsed, swallow all key events. Enter/Return/Space expands the pane.
         if let browser = browser, browser.isCollapsed {
@@ -457,21 +765,143 @@ class WatchtowerWebView: WKWebView, BrowserEngineView {
     }
 }
 
+final class WatchtowerInspectorIsolationWebView: WKWebView, BrowserEngineView {
+    weak var browser: BrowserPaneModel?
+    private var activeFindQuery: String = ""
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            browser?.isFocused = true
+            if let browser, let vm = browser.viewModel {
+                vm.focusPane(id: browser.id)
+            }
+        }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result {
+            browser?.isFocused = false
+        }
+        return result
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if isWatchtowerAppShortcut(event) {
+            return false
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    func loadRequest(_ request: URLRequest) {
+        load(request)
+    }
+
+    func goBack() {
+        _ = super.goBack()
+    }
+
+    func goForward() {
+        _ = super.goForward()
+    }
+
+    func reload() {
+        _ = super.reload()
+    }
+
+    func openWebInspector() {
+        let inspectorSelector = NSSelectorFromString("_inspector")
+        if responds(to: inspectorSelector),
+           let inspector = perform(inspectorSelector)?.takeUnretainedValue() as AnyObject? {
+            let show = NSSelectorFromString("show")
+            if inspector.responds(to: show) {
+                _ = inspector.perform(show)
+                return
+            }
+        }
+
+        let selectors = [
+            NSSelectorFromString("_showWebInspector"),
+            NSSelectorFromString("_showWebInspector:"),
+            NSSelectorFromString("showWebInspector"),
+            NSSelectorFromString("showWebInspector:")
+        ]
+
+        for selector in selectors where responds(to: selector) {
+            _ = perform(selector, with: nil)
+            return
+        }
+    }
+
+    func findInPage(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        activeFindQuery = trimmed
+        guard !trimmed.isEmpty else {
+            clearFindInPage()
+            return
+        }
+
+        if #available(macOS 11.0, *) {
+            let config = WKFindConfiguration()
+            config.backwards = false
+            config.caseSensitive = false
+            config.wraps = true
+            find(trimmed, configuration: config) { _ in }
+        }
+    }
+
+    func findNextInPage() {
+        guard !activeFindQuery.isEmpty else { return }
+        if #available(macOS 11.0, *) {
+            let config = WKFindConfiguration()
+            config.backwards = false
+            config.caseSensitive = false
+            config.wraps = true
+            find(activeFindQuery, configuration: config) { _ in }
+        }
+    }
+
+    func findPreviousInPage() {
+        guard !activeFindQuery.isEmpty else { return }
+        if #available(macOS 11.0, *) {
+            let config = WKFindConfiguration()
+            config.backwards = true
+            config.caseSensitive = false
+            config.wraps = true
+            find(activeFindQuery, configuration: config) { _ in }
+        }
+    }
+
+    func clearFindInPage() {
+        activeFindQuery = ""
+        evaluateJavaScript("window.getSelection && window.getSelection().removeAllRanges();") { _, _ in }
+    }
+}
+
 // MARK: - WebKitBrowserView
 
 struct WebKitBrowserView: NSViewRepresentable {
     @ObservedObject var browser: BrowserPaneModel
-    @ObservedObject private var appManager = GhosttyAppManager.shared
+    typealias NSViewType = WKWebView
 
     func makeCoordinator() -> Coordinator {
         Coordinator(browser: browser)
     }
 
-    func makeNSView(context: Context) -> WatchtowerWebView {
+    func makeNSView(context: Context) -> WKWebView {
         let config = BrowserConfiguration.makeConfiguration()
-        let webView = WatchtowerWebView(frame: .zero, configuration: config)
+        let webView: WKWebView
+        if inspectorIsolationModeEnabled {
+            webView = WatchtowerInspectorIsolationWebView(frame: .zero, configuration: config)
+        } else {
+            webView = WatchtowerWebView(frame: .zero, configuration: config)
+        }
         if #available(macOS 13.3, *) {
-            webView.isInspectable = true
+            (webView as? WKWebView)?.isInspectable = true
         }
 
         // Set a Safari-like user agent so websites don't misidentify
@@ -481,16 +911,11 @@ struct WebKitBrowserView: NSViewRepresentable {
         let osVersionString = "\(osVersion.majorVersion)_\(osVersion.minorVersion)_\(osVersion.patchVersion)"
         let safariMajor = osVersion.majorVersion + 3 // macOS 15 → Safari 18, etc.
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X \(osVersionString)) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/\(safariMajor).0 Safari/605.1.15"
-        webView.browser = browser
-        browser.engineView = webView
+        (webView as? BrowserEngineView)?.browser = browser
+        browser.engineView = webView as? BrowserEngineView
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         context.coordinator.webView = webView
-
-        // Set the web view appearance based on the terminal theme so that
-        // CSS `prefers-color-scheme` matches the surrounding UI.
-        let appManager = GhosttyAppManager.shared
-        webView.appearance = NSAppearance(named: appManager.isDarkTheme ? .darkAqua : .aqua)
 
         // Register the form interaction message handler on this web view's
         // own content controller (each pane gets a fresh configuration).
@@ -511,20 +936,13 @@ struct WebKitBrowserView: NSViewRepresentable {
             // frame and the view stays black.
             context.coordinator.loadedGeneration = self.browser.navigationGeneration
             logger.info("[makeNSView] Loading initial URL: \(self.browser.url.absoluteString, privacy: .public) (generation=\(self.browser.navigationGeneration))")
-            webView.load(URLRequest(url: self.browser.url))
+            _ = webView.load(URLRequest(url: self.browser.url))
         }
 
         return webView
     }
 
-    func updateNSView(_ webView: WatchtowerWebView, context: Context) {
-        // Keep the web view appearance in sync with the terminal theme so
-        // that CSS `prefers-color-scheme` reflects light/dark changes.
-        let desired = NSAppearance(named: appManager.isDarkTheme ? .darkAqua : .aqua)
-        if webView.appearance?.name != desired?.name {
-            webView.appearance = desired
-        }
-
+    func updateNSView(_ webView: WKWebView, context: Context) {
         // Only navigate when the model's navigation generation has advanced
         // past what the coordinator last loaded. This prevents KVO writeback
         // (which updates browser.url but not navigationGeneration) from
@@ -532,10 +950,10 @@ struct WebKitBrowserView: NSViewRepresentable {
         guard browser.navigationGeneration > context.coordinator.loadedGeneration else { return }
         context.coordinator.loadedGeneration = browser.navigationGeneration
         logger.info("[updateNSView] Navigating to: \(self.browser.url.absoluteString, privacy: .public) (generation=\(self.browser.navigationGeneration))")
-        webView.load(URLRequest(url: browser.url))
+        _ = webView.load(URLRequest(url: browser.url))
     }
 
-    static func dismantleNSView(_ nsView: WatchtowerWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
         coordinator.teardownKVO()
         nsView.configuration.userContentController.removeScriptMessageHandler(
             forName: "formInteraction"
@@ -928,5 +1346,91 @@ struct WebKitBrowserView: NSViewRepresentable {
                       resumeData: Data?) {
             logger.error("[download] Failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+}
+
+struct WebKitBrowserPaneControllerView: NSViewControllerRepresentable {
+    @ObservedObject var browser: BrowserPaneModel
+
+    final class PaneController: NSViewController {
+        let webView: WKWebView
+
+        init(webView: WKWebView) {
+            self.webView = webView
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func loadView() {
+            let root = NSView()
+            root.translatesAutoresizingMaskIntoConstraints = false
+
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(webView)
+
+            NSLayoutConstraint.activate([
+                webView.topAnchor.constraint(equalTo: root.topAnchor),
+                webView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+                webView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            ])
+
+            view = root
+        }
+    }
+
+    func makeCoordinator() -> WebKitBrowserView.Coordinator {
+        WebKitBrowserView.Coordinator(browser: browser)
+    }
+
+    func makeNSViewController(context: Context) -> PaneController {
+        let config = BrowserConfiguration.makeConfiguration()
+        let webView: WKWebView
+        if inspectorIsolationModeEnabled {
+            webView = WatchtowerInspectorIsolationWebView(frame: .zero, configuration: config)
+        } else {
+            webView = WatchtowerWebView(frame: .zero, configuration: config)
+        }
+
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
+
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+        let osVersionString = "\(osVersion.majorVersion)_\(osVersion.minorVersion)_\(osVersion.patchVersion)"
+        let safariMajor = osVersion.majorVersion + 3
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X \(osVersionString)) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/\(safariMajor).0 Safari/605.1.15"
+        (webView as? BrowserEngineView)?.browser = browser
+        browser.engineView = webView as? BrowserEngineView
+        webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
+        context.coordinator.webView = webView
+        webView.configuration.userContentController.add(context.coordinator, name: "formInteraction")
+
+        DispatchQueue.main.async {
+            context.coordinator.setupKVO(for: webView)
+            context.coordinator.loadedGeneration = self.browser.navigationGeneration
+            logger.info("[makeNSViewController] Loading initial URL: \(self.browser.url.absoluteString, privacy: .public) (generation=\(self.browser.navigationGeneration))")
+            _ = webView.load(URLRequest(url: self.browser.url))
+        }
+
+        return PaneController(webView: webView)
+    }
+
+    func updateNSViewController(_ controller: PaneController, context: Context) {
+        let webView = controller.webView
+        guard browser.navigationGeneration > context.coordinator.loadedGeneration else { return }
+        context.coordinator.loadedGeneration = browser.navigationGeneration
+        logger.info("[updateNSViewController] Navigating to: \(self.browser.url.absoluteString, privacy: .public) (generation=\(self.browser.navigationGeneration))")
+        _ = webView.load(URLRequest(url: browser.url))
+    }
+
+    static func dismantleNSViewController(_ controller: PaneController, coordinator: WebKitBrowserView.Coordinator) {
+        coordinator.teardownKVO()
+        controller.webView.configuration.userContentController.removeScriptMessageHandler(forName: "formInteraction")
     }
 }

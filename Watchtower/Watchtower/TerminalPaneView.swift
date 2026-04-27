@@ -179,10 +179,10 @@ struct PaneView: View {
                         GhosttyTerminalView(terminal: terminal, size: geo.size)
                     }
                 } else if let browser = pane as? BrowserPaneModel {
-                    ZStack {
+                    Group {
                         switch browser.engine {
                         case .webkit:
-                            WebKitBrowserView(browser: browser)
+                            WebKitBrowserPaneControllerView(browser: browser)
                         case .chromium:
                             ChromiumBrowserRepresentable(browser: browser)
                         }
@@ -195,9 +195,9 @@ struct PaneView: View {
                 }
             }
             .frame(width: pane.isCollapsed ? PaneModel.collapsedPaneWidth : nil)
-            .clipped()
-            .opacity(pane.isCollapsed ? 0 : 1)
-            .allowsHitTesting(!pane.isCollapsed)
+            // Keep the browser/terminal host out of an always-on compositing
+            // transform path (opacity/hit-testing wrappers) while debugging
+            // WKWebView attached inspector rendering.
 
             // Collapsed overlay — sits on top when collapsed
             if pane.isCollapsed {
@@ -271,7 +271,6 @@ struct PaneView: View {
         }
             .frame(width: fixedContentWidth, alignment: .leading)
         .background(appManager.backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius)
                 .strokeBorder(
