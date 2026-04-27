@@ -234,13 +234,13 @@ function addWatchtowerHooks(settings: ClaudeSettings, hookDir: string) {
   const idleCommand = join(hookDir, "set-idle.sh");
   const failedCommand = join(hookDir, "set-failed.sh");
 
-  const activeEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart"];
+  const activeEvents = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart"];
   for (const eventName of activeEvents) {
     const group = ensureGroup(settings.hooks, eventName, undefined);
     upsertCommandHook(group, activeCommand);
   }
 
-  const idleEvents = ["Stop", "SessionEnd"];
+  const idleEvents = ["SessionStart", "Stop", "SessionEnd"];
   for (const eventName of idleEvents) {
     const group = ensureGroup(settings.hooks, eventName, undefined);
     upsertCommandHook(group, idleCommand);
