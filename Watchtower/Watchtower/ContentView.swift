@@ -54,7 +54,7 @@ class PendingFocus {
 }
 
 struct ContentView: View {
-    @StateObject private var viewModel = PaneContainerViewModel()
+    @StateObject private var viewModel: PaneContainerViewModel
     @ObservedObject private var appManager = GhosttyAppManager.shared
     @ObservedObject private var config = WatchtowerConfig.shared
     @State private var showCLIInstallSheet = false
@@ -62,6 +62,10 @@ struct ContentView: View {
     @State private var paneZoomScale: CGFloat = 1.0
     @State private var magnifyMonitor: Any?
     @State private var hostWindowNumber: Int?
+
+    init(projectDirectory: String = NSHomeDirectory()) {
+        _viewModel = StateObject(wrappedValue: PaneContainerViewModel(projectDirectory: projectDirectory))
+    }
 
     private let minPaneZoomScale: CGFloat = 0.25
     private let maxPaneZoomScale: CGFloat = 1.0
@@ -336,6 +340,7 @@ struct ContentView: View {
         .background(
             WindowCaptureView { window in
                 hostWindowNumber = window?.windowNumber
+                window?.title = viewModel.projectTitle
             }
             .frame(width: 0, height: 0)
         )
@@ -1368,12 +1373,30 @@ class PaneContainerViewModel: ObservableObject {
     /// Stored so that switching focus exits focus mode cleanly.
     @Published var focusModePaneId: UUID? = nil
 
-    /// The git repo root for the currently focused terminal's directory.
+    /// The git repo root for the project directory.
     /// `nil` when not in a git repo.
     @Published var gitRepoRoot: String? = nil
 
-    /// Discovered actions for the focused terminal's project.
+    /// Discovered actions for the project directory.
     @Published var actions: [Action] = []
+
+    /// The window's project directory. Drives action discovery, git detection,
+    /// the toolbar title, and the default cwd for new panes. Set once at window
+    /// creation; defaults to the user's home directory.
+    @Published var projectDirectory: String
+
+    /// Display title for the toolbar — the last path component, or "~" for home.
+    var projectTitle: String {
+        let home = NSHomeDirectory()
+        if projectDirectory == home || projectDirectory == home + "/" {
+            return "~"
+        }
+        let trimmed = projectDirectory.hasSuffix("/")
+            ? String(projectDirectory.dropLast())
+            : projectDirectory
+        let last = (trimmed as NSString).lastPathComponent
+        return last.isEmpty ? trimmed : last
+    }
 
     /// The ID of the pane that the command palette is open on,
     /// or `nil` when the palette is closed. Stored explicitly so the
@@ -1506,11 +1529,11 @@ class PaneContainerViewModel: ObservableObject {
         return panes.first(where: { $0.isFocused })
     }
 
-    /// The contextual pane's current working directory.
-    /// Returns the home directory when no pane is focused or
-    /// when the focused pane has no directory (e.g. browser panes).
+    /// The window's project directory — the working directory used for
+    /// action execution and the action dialog. Window-scoped (no longer
+    /// derived from the focused pane).
     var focusedDirectory: String {
-        contextualPane?.directory ?? NSHomeDirectory()
+        projectDirectory
     }
 
     /// Event monitor that forwards horizontal scroll events from browser
@@ -1521,62 +1544,26 @@ class PaneContainerViewModel: ObservableObject {
     /// the event — WKWebView still sees it for vertical scrolling.
     private var browserScrollMonitor: Any? = nil
 
-    /// Subject that emits the currently focused pane. Used to drive
-    /// the `switchToLatest` pipeline that tracks the focused pane's
-    /// directory for git detection and action discovery.
-    private let focusedPaneSubject = CurrentValueSubject<PaneModel?, Never>(nil)
-
     /// Bag holding the Combine pipeline subscriptions.
     private var cancellables = Set<AnyCancellable>()
 
-    /// In-flight git detection task, cancelled when focus/directory changes.
+    /// In-flight git detection task, cancelled when projectDirectory changes.
     private var gitDetectionTask: Task<Void, Never>? = nil
 
-    /// In-flight action discovery task, cancelled when focus/directory changes.
+    /// In-flight action discovery task, cancelled when projectDirectory changes.
     private var actionDiscoveryTask: Task<Void, Never>? = nil
 
-    init() {
-        // Set up a Combine pipeline that:
-        // 1. Watches which pane is focused (via focusedPaneSubject)
-        // 2. For terminal panes, switchToLatest subscribes to $terminalDirectory
-        // 3. On each new directory, runs git detection and action discovery
-        // 4. For non-terminal panes (e.g. browser), emits nil to clear state
-        focusedPaneSubject
-            .compactMap { $0 }
-            .map { pane -> AnyPublisher<String?, Never> in
-                if let terminal = pane as? TerminalPaneModel {
-                    return terminal.$terminalDirectory
-                        .removeDuplicates()
-                        .map { Optional($0) }
-                        .eraseToAnyPublisher()
-                } else {
-                    // Non-terminal panes have no directory
-                    return Just(nil as String?).eraseToAnyPublisher()
-                }
-            }
-            .switchToLatest()
-            .sink { [weak self] directory in
-                if let directory = directory {
-                    self?.detectGitRepo(for: directory)
-                    self?.discoverActions(for: directory)
-                } else {
-                    // Browser pane or no directory — clear git/actions
-                    self?.gitDetectionTask?.cancel()
-                    self?.gitRepoRoot = nil
-                    self?.actionDiscoveryTask?.cancel()
-                    self?.actions = []
-                }
-            }
-            .store(in: &cancellables)
+    init(projectDirectory: String = NSHomeDirectory()) {
+        self.projectDirectory = projectDirectory
 
-        // Also handle the nil case (no focused pane) to clear state
-        focusedPaneSubject
-            .filter { $0 == nil }
-            .sink { [weak self] _ in
-                self?.gitDetectionTask?.cancel()
-                self?.gitRepoRoot = nil
-                self?.actionDiscoveryTask?.cancel()
-                self?.actions = []
+        // Run git detection and action discovery once for the project directory.
+        // The pipeline re-runs only if the project directory itself changes
+        // (it does not, today — projectDirectory is set at window creation).
+        $projectDirectory
+            .removeDuplicates()
+            .sink { [weak self] dir in
+                self?.detectGitRepo(for: dir)
+                self?.discoverActions(for: dir)
             }
             .store(in: &cancellables)
 
@@ -2426,12 +2413,10 @@ class PaneContainerViewModel: ObservableObject {
 
     @discardableResult
     func addTerminal(directory: String? = nil, initialInput: String? = nil) -> TerminalPaneModel {
-        // Inherit the working directory from the contextual pane.
-        // Width is inherited only when the contextual pane is also a terminal.
+        // New terminals open in the window's project directory unless the caller
+        // (e.g. the IPC server) supplies an explicit directory.
         let sourcePane = contextualPane
-        let resolvedDirectory = directory
-            ?? sourcePane?.directory
-            ?? NSHomeDirectory()
+        let resolvedDirectory = directory ?? projectDirectory
         let paneWidth = terminalPaneWidthForNewPane(sourcePane: sourcePane)
 
         // Determine animation duration (hold Shift for slow-motion)
@@ -2887,9 +2872,6 @@ class PaneContainerViewModel: ObservableObject {
             focusModePaneId = pane.id
         }
 
-        // Update the Combine pipeline for git detection / action discovery
-        focusedPaneSubject.send(pane)
-
         // Bump the generation so dismissCommandPalette can detect that
         // an action explicitly requested focus.
         focusGeneration &+= 1
@@ -3049,7 +3031,7 @@ class PaneContainerViewModel: ObservableObject {
         guard let command = ActionInterpreter.buildCommand(for: action) else { return }
 
         let sourcePane = contextualPane
-        let directory = sourcePane?.directory ?? NSHomeDirectory()
+        let directory = projectDirectory
         let paneWidth = terminalPaneWidthForNewPane(sourcePane: sourcePane)
 
         // Build environment variables

@@ -12,13 +12,14 @@ struct WatchtowerApp: App {
     @FocusedValue(\.paneViewModel) var activeViewModel
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        WindowGroup(for: URL.self) { $projectURL in
+            ContentView(projectDirectory: projectURL?.path ?? NSHomeDirectory())
                 .environmentObject(ghosttyManager)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 1960, height: 1000)
         .commands {
+            FileOpenCommand()
             // Override the default Quit command so we can set
             // WatchtowerRequestQuit() before calling terminate:.
             // This is necessary because CefApplication.m swizzles terminate:
@@ -501,7 +502,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureWindow(_ window: NSWindow) {
-        window.title = "Watchtower"
+        // Title is set by ContentView's WindowCaptureView based on the
+        // window's project directory; don't overwrite it here.
         if #available(macOS 11.0, *) {
             window.toolbarStyle = .unified
         }
@@ -601,6 +603,32 @@ extension FocusedValues {
     var paneViewModel: PaneContainerViewModel? {
         get { self[FocusedPaneViewModelKey.self] }
         set { self[FocusedPaneViewModelKey.self] = newValue }
+    }
+}
+
+// MARK: - File > Open command
+
+/// Adds a "File > Open Folder…" menu item that prompts for a directory and
+/// opens a new window scoped to it. Lives in its own Commands struct so it
+/// can read the openWindow environment value from SwiftUI.
+struct FileOpenCommand: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("Open Folder…") {
+                let panel = NSOpenPanel()
+                panel.canChooseDirectories = true
+                panel.canChooseFiles = false
+                panel.allowsMultipleSelection = false
+                panel.prompt = "Open"
+                panel.message = "Choose a folder to open as a project"
+                panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory())
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                openWindow(value: url.standardizedFileURL)
+            }
+            .keyboardShortcut("o", modifiers: [.command])
+        }
     }
 }
 
