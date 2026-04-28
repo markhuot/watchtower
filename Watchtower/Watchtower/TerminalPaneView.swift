@@ -681,7 +681,13 @@ struct ProgressBarView: View {
     let progress: PaneProgress?
     @ObservedObject private var appManager = GhosttyAppManager.shared
 
-    @State private var indeterminateOffset: CGFloat = -0.3
+    /// Width of the indeterminate bar as a fraction of the available width.
+    private static let indeterminateBarWidthRatio: CGFloat = 0.3
+
+    /// Animates 0...1. The actual horizontal offset is scaled by
+    /// (1 - barWidthRatio) so the bar's right edge never exceeds the
+    /// container - preventing the bar from drawing past the pane.
+    @State private var indeterminatePosition: CGFloat = 0
 
     private var progressColor: Color {
         guard let progress = progress else { return .clear }
@@ -696,14 +702,15 @@ struct ProgressBarView: View {
 
                 if let progress = progress {
                     if progress.state == .indeterminate || (progress.state != .indeterminate && progress.value == nil) {
-                        // Indeterminate bouncing bar
+                        // Indeterminate bouncing bar — slides between
+                        // (0, barWidth) and (width - barWidth, width).
                         RoundedRectangle(cornerRadius: 2)
                             .fill(progressColor)
-                            .frame(width: geo.size.width * 0.3)
-                            .offset(x: indeterminateOffset * geo.size.width)
+                            .frame(width: geo.size.width * Self.indeterminateBarWidthRatio)
+                            .offset(x: indeterminatePosition * geo.size.width * (1 - Self.indeterminateBarWidthRatio))
                             .onAppear {
                                 withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-                                    indeterminateOffset = 1.0
+                                    indeterminatePosition = 1
                                 }
                             }
                     } else if let value = progress.value {
@@ -716,6 +723,10 @@ struct ProgressBarView: View {
                 }
             }
         }
+        // Belt-and-suspenders: clip to the pane's allotted width so
+        // any sub-pixel rounding or future animation tweaks can't bleed
+        // into adjacent panes.
+        .clipped()
     }
 }
 
