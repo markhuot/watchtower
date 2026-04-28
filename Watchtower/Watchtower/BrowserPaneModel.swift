@@ -66,10 +66,10 @@ class BrowserPaneModel: PaneModel {
         return windowWidth * 0.8
     }
 
-    init(url: URL = URL(string: "about:blank")!, paneWidth: CGFloat = PaneModel.defaultPaneWidth, engine: BrowserEngine = WatchtowerConfig.shared.browserEngine) {
+    init(id: UUID = UUID(), url: URL = URL(string: "about:blank")!, paneWidth: CGFloat = PaneModel.defaultPaneWidth, engine: BrowserEngine = WatchtowerConfig.shared.browserEngine) {
         self.url = url
         self.engine = engine
-        super.init(id: UUID(), paneWidth: paneWidth)
+        super.init(id: id, paneWidth: paneWidth)
         // If the initial URL is not about:blank, mark generation 1 so
         // makeNSView's initial load is recognized.
         if url.absoluteString != "about:blank" {

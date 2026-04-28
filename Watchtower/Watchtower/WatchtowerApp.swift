@@ -13,9 +13,12 @@ struct WatchtowerApp: App {
 
     var body: some Scene {
         WindowGroup(for: URL.self) { $projectURL in
-            ContentView(projectDirectory: projectURL?.path ?? NSHomeDirectory())
+            let directory = projectURL?.path ?? NSHomeDirectory()
+            ContentView(projectDirectory: directory)
                 .environmentObject(ghosttyManager)
                 .frame(minWidth: 900, minHeight: 600)
+                .background(WindowRestorer(currentDirectory: directory))
+                .background(WindowFrameAutosave(directory: directory))
         }
         .defaultSize(width: 1960, height: 1000)
         .commands {
@@ -207,6 +210,148 @@ struct WatchtowerApp: App {
 
         Settings {
             SettingsView()
+        }
+    }
+}
+
+/// Empty SwiftUI view, attached to every ContentView's background, that
+/// fires once on the first window's appearance to reopen any other
+/// persisted project windows via SwiftUI's `openWindow` action.
+///
+/// SwiftUI auto-opens a single "untitled" window at launch with a nil
+/// URL value. If persisted state exists and that auto-opened window's
+/// directory is not part of it, the restorer dismisses the auto-opened
+/// window after queuing the persisted ones - so the user lands on
+/// exactly the windows they had at quit, not those plus an extra blank.
+private struct WindowRestorer: View {
+    let currentDirectory: String
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .onAppear { performRestoreOnce() }
+    }
+
+    private static var didRestore = false
+
+    @MainActor
+    private func performRestoreOnce() {
+        guard !Self.didRestore else { return }
+        Self.didRestore = true
+
+        let directories = WindowStateStore.shared.persistedWindowDirectories
+        guard !directories.isEmpty else { return }
+
+        // Open one window per persisted directory, skipping any that
+        // matches the current (auto-opened) window's directory - that
+        // window's PaneContainerViewModel has already restored its
+        // panes from the store, so opening another for the same URL
+        // would produce two windows showing identical state.
+        for dir in directories where dir != currentDirectory {
+            let url = URL(fileURLWithPath: dir, isDirectory: true)
+            openWindow(value: url.standardizedFileURL)
+        }
+
+        // If the auto-opened window's directory wasn't restored from disk
+        // (i.e. it's the empty default), dismiss it on the next runloop
+        // tick. Deferring guarantees the openWindow calls have been
+        // realized before this window goes away, so the app doesn't see
+        // a moment of "no windows open" and quit.
+        if !directories.contains(currentDirectory) {
+            DispatchQueue.main.async {
+                dismissWindow()
+            }
+        }
+    }
+}
+
+/// Persists window frame (origin + size) per project directory.
+///
+/// We can't use `setFrameAutosaveName` because SwiftUI's WindowGroup
+/// installs its own autosave name keyed off the view hierarchy and our
+/// override is silently ignored. Instead, we listen for windowDidMove
+/// and windowDidResize on the hosting NSWindow, push the frame into
+/// `WindowStateStore`, and apply the stored frame back when the
+/// window first appears.
+private struct WindowFrameAutosave: NSViewRepresentable {
+    let directory: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(directory: directory) }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { [weak view] in
+            guard let window = view?.window else { return }
+            context.coordinator.attach(to: window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if let window = nsView.window {
+            context.coordinator.attach(to: window)
+        }
+    }
+
+    final class Coordinator {
+        let directory: String
+        private weak var window: NSWindow?
+        private var observers: [NSObjectProtocol] = []
+        private var didRestore = false
+
+        init(directory: String) {
+            self.directory = directory
+        }
+
+        deinit {
+            for token in observers {
+                NotificationCenter.default.removeObserver(token)
+            }
+        }
+
+        func attach(to window: NSWindow) {
+            // The view's hosting window may swap as SwiftUI re-parents
+            // (rare, but cheap to defend against).
+            if self.window === window { return }
+            for token in observers {
+                NotificationCenter.default.removeObserver(token)
+            }
+            observers.removeAll()
+            self.window = window
+
+            // Apply the saved frame the first time we see this window.
+            // We re-apply on a later runloop tick because SwiftUI's
+            // WindowGroup may set its own default frame after we apply
+            // ours; by deferring once we win the last write.
+            if !didRestore, let savedFrame = WindowStateStore.shared.frame(for: directory) {
+                didRestore = true
+                window.setFrame(savedFrame, display: true, animate: false)
+                DispatchQueue.main.async { [weak window] in
+                    window?.setFrame(savedFrame, display: true, animate: false)
+                }
+            }
+
+            let center = NotificationCenter.default
+            let dir = directory
+            observers.append(center.addObserver(
+                forName: NSWindow.didMoveNotification,
+                object: window,
+                queue: .main
+            ) { [weak window] _ in
+                guard let w = window else { return }
+                WindowStateStore.shared.recordFrame(w.frame, for: dir)
+            })
+            observers.append(center.addObserver(
+                forName: NSWindow.didResizeNotification,
+                object: window,
+                queue: .main
+            ) { [weak window] _ in
+                guard let w = window else { return }
+                WindowStateStore.shared.recordFrame(w.frame, for: dir)
+            })
         }
     }
 }
@@ -533,6 +678,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - App Quit Confirmation
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Persist current window/pane layout so the next launch can
+        // reconstruct it.
+        WindowStateStore.shared.flush()
+
         appearanceObserver = nil
         if let monitor = browserShortcutMonitor {
             NSEvent.removeMonitor(monitor)

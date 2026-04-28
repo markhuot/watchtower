@@ -1556,6 +1556,31 @@ class PaneContainerViewModel: ObservableObject {
     init(projectDirectory: String = NSHomeDirectory()) {
         self.projectDirectory = projectDirectory
 
+        // Restore persisted panes for this project directory and register
+        // with the store so future mutations are saved. Restoration must
+        // happen before the panes pipeline below starts watching changes,
+        // otherwise the restore itself would trigger a redundant save.
+        let restored = WindowStateStore.shared.register(self)
+        if !restored.isEmpty {
+            self.panes = Self.rehydratePanes(restored, viewModel: self)
+            self.pinnedPaneId = WindowStateStore.shared.persistedPinnedPaneId(for: projectDirectory)
+        }
+
+        // Persist on any pane mutation (add, remove, reorder, width change).
+        // Drop the initial value so we don't write immediately on launch.
+        $panes
+            .dropFirst()
+            .sink { _ in
+                WindowStateStore.shared.scheduleSave()
+            }
+            .store(in: &cancellables)
+        $pinnedPaneId
+            .dropFirst()
+            .sink { _ in
+                WindowStateStore.shared.scheduleSave()
+            }
+            .store(in: &cancellables)
+
         // Run git detection and action discovery once for the project directory.
         // The pipeline re-runs only if the project directory itself changes
         // (it does not, today — projectDirectory is set at window creation).
@@ -1604,6 +1629,45 @@ class PaneContainerViewModel: ObservableObject {
         if let monitor = browserScrollMonitor {
             NSEvent.removeMonitor(monitor)
         }
+        // Identity match inside the store guards against re-registration
+        // by a fresh model with the same directory before this fires.
+        WindowStateStore.shared.unregisterByDirectory(projectDirectory)
+    }
+
+    /// Rehydrate persisted pane records into live pane models. Skips any
+    /// records the current build no longer knows how to construct.
+    private static func rehydratePanes(_ records: [PersistedPane], viewModel: PaneContainerViewModel) -> [PaneModel] {
+        var result: [PaneModel] = []
+        for record in records {
+            switch record.kind {
+            case .terminal:
+                guard let dir = record.directory else { continue }
+                let pane = TerminalPaneModel(
+                    id: record.id,
+                    title: record.title ?? "Terminal",
+                    status: .idle,
+                    directory: dir,
+                    paneWidth: CGFloat(record.paneWidth)
+                )
+                pane.isCollapsed = record.isCollapsed
+                pane.isAppearing = false
+                pane.viewModel = viewModel
+                result.append(pane)
+            case .browser:
+                guard let urlString = record.url, let url = URL(string: urlString) else { continue }
+                let pane = BrowserPaneModel(
+                    id: record.id,
+                    url: url,
+                    paneWidth: CGFloat(record.paneWidth)
+                )
+                if let title = record.title { pane.pageTitle = title }
+                pane.isCollapsed = record.isCollapsed
+                pane.isAppearing = false
+                pane.viewModel = viewModel
+                result.append(pane)
+            }
+        }
+        return result
     }
 
     // MARK: - Browser horizontal scroll forwarding
