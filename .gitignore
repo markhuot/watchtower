@@ -36,3 +36,10 @@ chromium/
 cli/node_modules/
 cli/bun.lockb
 cli/watchtower
+
+# Broker (Swift package outputs)
+broker/.build/
+broker/.swiftpm/
+broker/Package.resolved
+broker/watchtower-broker
+broker/watchtower-broker-cli

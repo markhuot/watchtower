@@ -408,6 +408,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Start the IPC server for CLI communication.
         IPCServer.shared.start()
 
+        // Spawn the bundled PTY broker so its socket is ready for clients
+        // (mobile, attach tools) regardless of pane integration state.
+        BrokerSupervisor.shared.startIfNeeded()
+
         appearanceObserver = NSApplication.shared.observe(\ .effectiveAppearance, options: [.new, .initial]) { _, _ in
             GhosttyAppManager.shared.syncColorScheme()
         }

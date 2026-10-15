@@ -47,6 +47,9 @@
 		AA0000010000000000000031 /* CLIInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000031 /* CLIInstaller.swift */; };
 		AA0000010000000000000032 /* CLIInstallSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000032 /* CLIInstallSheet.swift */; };
 		AA0000010000000000000033 /* watchtower in Resources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000033 /* watchtower */; };
+		AA0000010000000000000034 /* watchtower-broker in Resources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000034 /* watchtower-broker */; };
+		AA0000010000000000000035 /* watchtower-broker-cli in Resources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000035 /* watchtower-broker-cli */; };
+		AA0000010000000000000036 /* BrokerSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000036 /* BrokerSupervisor.swift */; };
 		AA0000010000000000000040 /* WindowStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000040 /* WindowStateStore.swift */; };
 /* End PBXBuildFile section */
 
@@ -111,6 +114,9 @@
 		AA0000020000000000000031 /* CLIInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIInstaller.swift; sourceTree = "<group>"; };
 		AA0000020000000000000032 /* CLIInstallSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIInstallSheet.swift; sourceTree = "<group>"; };
 		AA0000020000000000000033 /* watchtower */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = watchtower; path = cli/watchtower; sourceTree = SOURCE_ROOT; };
+		AA0000020000000000000034 /* watchtower-broker */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = "watchtower-broker"; path = "broker/watchtower-broker"; sourceTree = SOURCE_ROOT; };
+		AA0000020000000000000035 /* watchtower-broker-cli */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = "watchtower-broker-cli"; path = "broker/watchtower-broker-cli"; sourceTree = SOURCE_ROOT; };
+		AA0000020000000000000036 /* BrokerSupervisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerSupervisor.swift; sourceTree = "<group>"; };
 		AA0000020000000000000040 /* WindowStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowStateStore.swift; sourceTree = "<group>"; };
 		AA0000030000000000000030 /* WatchtowerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatchtowerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -163,6 +169,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "set -e\n\nexport PATH=\"$HOME/.bun/bin:$PATH\"\n\nif ! command -v bun >/dev/null 2>&1; then\n  if [ -x /opt/homebrew/bin/bun ]; then\n    export PATH=\"/opt/homebrew/bin:$PATH\"\n  fi\nfi\n\nif ! command -v bun >/dev/null 2>&1; then\n  echo \"error: bun is required to build the Watchtower CLI\"\n  echo \"Install from https://bun.sh and re-run the build.\"\n  exit 1\nfi\n\ncd \"${SRCROOT}/cli\"\nbun install\nbun build --compile src/index.ts --outfile watchtower\n";
+		};
+		AA0000100000000000000004 /* Build Broker */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/broker/Package.swift",
+			);
+			name = "Build Broker";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/broker/watchtower-broker",
+				"$(SRCROOT)/broker/watchtower-broker-cli",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -e\n\nexport PATH=\"/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"\n\nif ! command -v swift >/dev/null 2>&1; then\n  echo \"error: swift toolchain is required to build the Watchtower broker\"\n  exit 1\nfi\n\ncd \"${SRCROOT}/broker\"\nswift build -c release --product watchtower-broker\nswift build -c release --product watchtower-broker-cli\n\n# Copy products to stable paths the Resources phase references.\ncp .build/release/watchtower-broker watchtower-broker\ncp .build/release/watchtower-broker-cli watchtower-broker-cli\nchmod +x watchtower-broker watchtower-broker-cli\n";
 		};
 		AA0000100000000000000002 /* Create CEF Helper Variants */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -286,6 +314,9 @@
 				AA0000020000000000000031 /* CLIInstaller.swift */,
 				AA0000020000000000000032 /* CLIInstallSheet.swift */,
 				AA0000020000000000000033 /* watchtower */,
+				AA0000020000000000000034 /* watchtower-broker */,
+				AA0000020000000000000035 /* watchtower-broker-cli */,
+				AA0000020000000000000036 /* BrokerSupervisor.swift */,
 				AA0000020000000000000040 /* WindowStateStore.swift */,
 			);
 			path = Watchtower/Watchtower;
@@ -336,6 +367,7 @@
 				AA00000A0000000000000001 /* Sources */,
 				AA0000040000000000000001 /* Frameworks */,
 				AA0000100000000000000003 /* Build CLI */,
+				AA0000100000000000000004 /* Build Broker */,
 				AA00000B0000000000000001 /* Resources */,
 				AA00000B0000000000000002 /* Embed Frameworks */,
 				AA00000B0000000000000003 /* Embed Helpers */,
@@ -434,6 +466,8 @@
 			files = (
 				AA0000010000000000000006 /* Assets.xcassets in Resources */,
 				AA0000010000000000000033 /* watchtower in Resources */,
+				AA0000010000000000000034 /* watchtower-broker in Resources */,
+				AA0000010000000000000035 /* watchtower-broker-cli in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -476,6 +510,7 @@
 				AA000001000000000000002F /* IPCServer.swift in Sources */,
 				AA0000010000000000000031 /* CLIInstaller.swift in Sources */,
 				AA0000010000000000000032 /* CLIInstallSheet.swift in Sources */,
+				AA0000010000000000000036 /* BrokerSupervisor.swift in Sources */,
 				AA0000010000000000000040 /* WindowStateStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

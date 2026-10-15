@@ -189,4 +189,6 @@ bun build --compile src/index.ts --outfile watchtower  # compile to standalone b
 
 ### Xcode Project ID Scheme
 
-Sequential human-readable IDs with prefix `AA`. Next available suffix: `0034`. Used suffixes: `0031` (CLIInstaller.swift), `0032` (CLIInstallSheet.swift), `0033` (watchtower CLI binary resource).
+Sequential human-readable IDs with prefix `AA`. Next available suffix: `0037`. Used suffixes: `0031` (CLIInstaller.swift), `0032` (CLIInstallSheet.swift), `0033` (watchtower CLI binary resource), `0034` (watchtower-broker binary resource), `0035` (watchtower-broker-cli binary resource), `0036` (BrokerSupervisor.swift).
+
+The "Build Broker" shell script phase (`AA0000100000000000000004`) runs `swift build -c release` in `broker/` and copies products to `broker/watchtower-broker` + `broker/watchtower-broker-cli`. Those paths are referenced as bundle Resources.
